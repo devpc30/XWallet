@@ -1,86 +1,37 @@
 /**
- * Authentication utilities
- *   - hashPassword / verifyPassword (bcrypt cost 12)
- *   - signToken / verifyToken (JWT با HS256)
- *   - authGuard middleware برای Fastify
+ * Authentication facade:
+ *   - re-exports password & JWT utilities
+ *   - Fastify middleware (authGuard, requireNotMustChange, requireRole)
+ *   - decorator registration helper
  */
 
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { verifyToken, type TokenPayload, type AdminRole } from './jwt.js';
 
-const BCRYPT_COST = 12;
+export * from './passwords.js';
+export * from './jwt.js';
 
-// JWT secret از env (base64 از ۳۲ بایت رندوم)
-// تولید:  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-function getJwtSecret(): string {
-  const s = process.env.JWT_SECRET;
-  if (!s || s.length < 32) {
-    throw new Error('JWT_SECRET باید تنظیم شده و حداقل ۳۲ کاراکتر باشه');
-  }
-  return s;
-}
-
-// ─── Password ───
-export async function hashPassword(plain: string): Promise<string> {
-  if (plain.length < 4) throw new Error('رمز نمی‌تونه خیلی کوتاه باشه');
-  return bcrypt.hash(plain, BCRYPT_COST);
-}
-
-export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(plain, hash);
-}
-
-// ─── JWT ───
-export interface TokenPayload {
-  adminId: number;
-  username: string;
-  role: string;
-  mustChangePassword: boolean;
-}
-
-export function signToken(payload: TokenPayload): string {
-  return jwt.sign(payload, getJwtSecret(), {
-    algorithm: 'HS256',
-    expiresIn: '8h',
-  });
-}
-
-export function verifyToken(token: string): TokenPayload {
-  return jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as TokenPayload;
-}
-
-// ─── Fastify middleware ───
-
-// Session token از cookie می‌خونیم (httpOnly) — امن‌تر از localStorage
-const COOKIE_NAME = 'admin_session';
+export const COOKIE_NAME = 'admin_token';
 
 export const cookieOptions = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
   sameSite: 'strict' as const,
   path: '/',
-  maxAge: 60 * 60 * 8, // 8 hours
+  maxAge: 60 * 60 * 8,
 };
-
-export function setAuthCookie(reply: FastifyReply, token: string): void {
-  reply.setCookie(COOKIE_NAME, token, cookieOptions);
-}
-
-export function clearAuthCookie(reply: FastifyReply): void {
-  reply.clearCookie(COOKIE_NAME, { path: '/' });
-}
 
 declare module 'fastify' {
   interface FastifyRequest {
     admin?: TokenPayload;
   }
+  interface FastifyInstance {
+    requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requireNotMustChange: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requireRole: (role: AdminRole) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  }
 }
 
-/**
- * middleware: احراز هویت. اگه token نداشت یا invalid بود 401 می‌ده.
- * اگه must_change_password=true و route !== /auth/change-password → 403.
- */
 export async function authGuard(
   request: FastifyRequest,
   reply: FastifyReply
@@ -88,25 +39,41 @@ export async function authGuard(
   const token = request.cookies[COOKIE_NAME];
 
   if (!token) {
-    return reply.code(401).send({ error: 'unauthenticated' });
+    reply.code(401).send({ error: 'unauthenticated' });
+    return;
   }
 
   try {
-    const payload = verifyToken(token);
+    const payload = await verifyToken(token);
     request.admin = payload;
-
-    // اگه باید رمز عوض کنه، فقط اجازه‌ی change-password و logout داریم
-    const allowedWithMustChange = ['/auth/change-password', '/auth/logout', '/auth/me'];
-    if (
-      payload.mustChangePassword &&
-      !allowedWithMustChange.includes(request.routeOptions.url ?? '')
-    ) {
-      return reply.code(403).send({
-        error: 'must_change_password',
-        message: 'باید اول رمز پیش‌فرض رو عوض کنی',
-      });
-    }
   } catch {
-    return reply.code(401).send({ error: 'invalid_token' });
+    reply.clearCookie(COOKIE_NAME, { path: '/' });
+    reply.code(401).send({ error: 'invalid_token' });
   }
+}
+
+export async function requireNotMustChange(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  if (request.admin?.mustChangePassword) {
+    reply.code(403).send({
+      error: 'must_change_password',
+      message: 'باید اول رمز پیش‌فرض رو عوض کنی',
+    });
+  }
+}
+
+export function requireRole(role: AdminRole) {
+  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (request.admin?.role !== role) {
+      reply.code(403).send({ error: 'forbidden' });
+    }
+  };
+}
+
+export function registerAuthDecorators(app: FastifyInstance): void {
+  app.decorate('requireAuth', authGuard);
+  app.decorate('requireNotMustChange', requireNotMustChange);
+  app.decorate('requireRole', requireRole);
 }

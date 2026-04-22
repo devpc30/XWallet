@@ -136,7 +136,7 @@ createApp({
     const submit = async () => {
       error.value = '';
       if (newPassword.value !== confirmPassword.value) return error.value = 'رمز جدید و تکرارش یکی نیستن';
-      if (newPassword.value.length < 8) return error.value = 'حداقل ۸ کاراکتر';
+      if (newPassword.value.length < 10) return error.value = 'حداقل ۱۰ کاراکتر و شامل حرف و عدد';
       busy.value = true;
       try {
         await api('/auth/change-password', { method: 'POST', body: { oldPassword: oldPassword.value, newPassword: newPassword.value } });
@@ -150,7 +150,7 @@ createApp({
       <h2 class="text-xl font-bold mb-6">تغییر رمز</h2>
       <form @submit.prevent="submit" class="space-y-4">
         <div><label class="block text-sm mb-1">رمز فعلی</label><input v-model="oldPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
-        <div><label class="block text-sm mb-1">رمز جدید (حداقل ۸)</label><input v-model="newPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
+        <div><label class="block text-sm mb-1">رمز جدید (حداقل ۱۰، حرف + عدد)</label><input v-model="newPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
         <div><label class="block text-sm mb-1">تکرار</label><input v-model="confirmPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
         <div v-if="error" class="text-red-600 text-sm">{{ error }}</div>
         <button :disabled="busy" class="w-full py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ busy ? '...' : 'تغییر' }}</button>

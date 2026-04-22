@@ -105,7 +105,7 @@ export async function benchmarkRoutes(app: FastifyInstance) {
           wordCount: request.body.wordCount ?? 12,
           addressesPerMnemonic: request.body.addressesPerMnemonic ?? 3,
           chains: request.body.chains ?? ['BTC', 'ETH', 'TRON'],
-          adminId: request.admin!.adminId,
+          adminId: request.admin!.sub,
         });
         return reply.code(201).send({ runId, maxTarget: MAX_TARGET });
       } catch (e) {

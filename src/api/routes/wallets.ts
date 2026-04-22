@@ -15,9 +15,15 @@ import {
   revealMnemonic,
 } from '../../services/wallet-service.js';
 import type { Chain } from '../../wallet/derivation.js';
+import { verifyPassword } from '../../auth/passwords.js';
 
 export default async function walletRoutes(fastify: FastifyInstance) {
   const authed = [fastify.requireAuth, fastify.requireNotMustChange];
+  const superAdminOnly = [
+    fastify.requireAuth,
+    fastify.requireNotMustChange,
+    fastify.requireRole('super_admin'),
+  ];
 
   // GET /
   fastify.get<{
@@ -167,15 +173,23 @@ export default async function walletRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // POST /:id/reveal (super_admin only)
-  fastify.post<{ Params: { id: string } }>(
+  // POST /:id/reveal (super_admin only + re-auth با رمز)
+  fastify.post<{
+    Params: { id: string };
+    Body: { password: string };
+  }>(
     '/:id/reveal',
     {
-      preHandler: [
-        fastify.requireAuth,
-        fastify.requireNotMustChange,
-        fastify.requireRole('super_admin'),
-      ],
+      preHandler: superAdminOnly,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['password'],
+          properties: {
+            password: { type: 'string', minLength: 1, maxLength: 128 },
+          },
+        },
+      },
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     },
     async (req, reply) => {
@@ -184,6 +198,33 @@ export default async function walletRoutes(fastify: FastifyInstance) {
         return reply.code(400).send({ error: 'invalid id' });
       }
       const ua = req.headers['user-agent'] ?? null;
+      const adminId = req.admin!.sub;
+
+      // Re-verify admin password before revealing mnemonic
+      const adminRes = await pool.query<{ password_hash: string }>(
+        `SELECT password_hash FROM admins WHERE id = $1 AND is_active = true`,
+        [adminId]
+      );
+      if (adminRes.rows.length === 0) {
+        return reply.code(401).send({ error: 'unauthenticated' });
+      }
+
+      const passwordOk = await verifyPassword(req.body.password, adminRes.rows[0].password_hash);
+      if (!passwordOk) {
+        await pool.query(
+          `INSERT INTO mnemonic_access_log
+             (wallet_id, admin_id, success, ip_address, user_agent)
+           VALUES ($1, $2, false, $3, $4)`,
+          [id, adminId, req.ip, ua]
+        );
+        await pool.query(
+          `INSERT INTO admin_audit_log
+             (admin_id, action, target_type, target_id, success, details, ip_address, user_agent)
+           VALUES ($1, 'reveal_mnemonic', 'wallet', $2, false, $3, $4, $5)`,
+          [adminId, id, { reason: 'wrong_password' }, req.ip, ua]
+        );
+        return reply.code(401).send({ error: 'رمز اشتباهه' });
+      }
 
       try {
         const mnemonic = await revealMnemonic(id);
@@ -191,13 +232,13 @@ export default async function walletRoutes(fastify: FastifyInstance) {
           `INSERT INTO admin_audit_log
              (admin_id, action, target_type, target_id, success, ip_address, user_agent)
            VALUES ($1, 'reveal_mnemonic', 'wallet', $2, true, $3, $4)`,
-          [req.admin!.sub, id, req.ip, ua]
+          [adminId, id, req.ip, ua]
         );
         await pool.query(
           `INSERT INTO mnemonic_access_log
              (wallet_id, admin_id, success, ip_address, user_agent)
            VALUES ($1, $2, true, $3, $4)`,
-          [id, req.admin!.sub, req.ip, ua]
+          [id, adminId, req.ip, ua]
         );
         return { mnemonic };
       } catch (e) {
@@ -205,7 +246,7 @@ export default async function walletRoutes(fastify: FastifyInstance) {
           `INSERT INTO mnemonic_access_log
              (wallet_id, admin_id, success, ip_address, user_agent)
            VALUES ($1, $2, false, $3, $4)`,
-          [id, req.admin!.sub, req.ip, ua]
+          [id, adminId, req.ip, ua]
         );
         throw e;
       }

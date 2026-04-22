@@ -1,9 +1,9 @@
 /**
  * Auth routes:
- *   POST /api/auth/login
- *   POST /api/auth/logout
- *   GET  /api/auth/me
- *   POST /api/auth/change-password
+ *   POST /auth/login
+ *   POST /auth/logout
+ *   GET  /auth/me
+ *   POST /auth/change-password
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -18,11 +18,12 @@ import {
   revokeSession,
   revokeAllSessionsForAdmin,
 } from '../../auth/jwt.js';
+import { COOKIE_NAME, cookieOptions } from '../../auth/index.js';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MINUTES = 15;
 
-// dummy hash برای timing-attack resistance
+// dummy hash برای timing-attack resistance (hash of "timing-safe-dummy-value")
 const DUMMY_HASH = '$2b$12$C6UzMDM.H6dfI/f/IKcEe.6mQvT0QGFKf1iJYYgZcPsKcR7vP8xQa';
 
 export default async function authRoutes(fastify: FastifyInstance) {
@@ -121,17 +122,14 @@ export default async function authRoutes(fastify: FastifyInstance) {
       );
 
       const { token, expiresAt } = await signToken(
-        admin.id,
+        Number(admin.id),
         admin.role,
         admin.must_change_password,
-        { ip, userAgent: userAgent ?? undefined }
+        { ip, userAgent }
       );
 
-      reply.setCookie('admin_token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        path: '/',
+      reply.setCookie(COOKIE_NAME, token, {
+        ...cookieOptions,
         expires: expiresAt,
       });
 
@@ -140,7 +138,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return {
         success: true,
         admin: {
-          id: admin.id,
+          id: Number(admin.id),
           username,
           role: admin.role,
           mustChangePassword: admin.must_change_password,
@@ -162,7 +160,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
           [req.admin.sub, req.ip, req.headers['user-agent'] ?? null]
         );
       }
-      reply.clearCookie('admin_token', { path: '/' });
+      reply.clearCookie(COOKIE_NAME, { path: '/' });
       return { success: true };
     }
   );
@@ -177,19 +175,21 @@ export default async function authRoutes(fastify: FastifyInstance) {
     if (res.rows.length === 0) return reply.code(404).send({ error: 'not found' });
     const row = res.rows[0];
     return {
-      id: row.id,
-      username: row.username,
-      role: row.role,
-      mustChangePassword: row.must_change_password,
-      lastLoginAt: row.last_login_at,
-      lastLoginIp: row.last_login_ip,
+      admin: {
+        id: Number(row.id),
+        username: row.username,
+        role: row.role,
+        mustChangePassword: row.must_change_password,
+        lastLoginAt: row.last_login_at,
+        lastLoginIp: row.last_login_ip,
+      },
     };
   });
 
   // ─────────────── POST /change-password ───────────────
-  // این route حتی برای mustChangePassword هم باز می‌مونه (نیاز به requireNotMustChange نداره)
+  // این route حتی برای mustChangePassword هم باز می‌مونه
   fastify.post<{
-    Body: { currentPassword: string; newPassword: string };
+    Body: { currentPassword?: string; oldPassword?: string; newPassword: string };
   }>(
     '/change-password',
     {
@@ -197,17 +197,23 @@ export default async function authRoutes(fastify: FastifyInstance) {
       schema: {
         body: {
           type: 'object',
-          required: ['currentPassword', 'newPassword'],
+          required: ['newPassword'],
           properties: {
             currentPassword: { type: 'string', minLength: 1 },
-            newPassword: { type: 'string', minLength: 10, maxLength: 128 },
+            oldPassword: { type: 'string', minLength: 1 },
+            newPassword: { type: 'string', minLength: 1, maxLength: 128 },
           },
         },
       },
       config: { rateLimit: { max: 5, timeWindow: '10 minutes' } },
     },
     async (req, reply) => {
-      const { currentPassword, newPassword } = req.body;
+      const currentPassword = req.body.currentPassword ?? req.body.oldPassword;
+      const { newPassword } = req.body;
+      if (!currentPassword) {
+        return reply.code(400).send({ error: 'رمز فعلی لازمه' });
+      }
+
       const adminId = req.admin!.sub;
       const ip = req.ip;
 
@@ -253,7 +259,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         [adminId, ip]
       );
 
-      reply.clearCookie('admin_token', { path: '/' });
+      reply.clearCookie(COOKIE_NAME, { path: '/' });
       return { success: true, message: 'رمز عوض شد. لطفاً دوباره لاگین کن.' };
     }
   );

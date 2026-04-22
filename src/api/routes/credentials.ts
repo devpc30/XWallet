@@ -60,7 +60,7 @@ export async function credentialRoutes(app: FastifyInstance) {
         provider,
         value: value.trim(),
         label,
-        adminId: request.admin!.adminId,
+        adminId: request.admin!.sub,
       });
       return reply.code(201).send({ id });
     }

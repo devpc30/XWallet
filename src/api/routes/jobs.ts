@@ -119,7 +119,7 @@ export async function jobRoutes(app: FastifyInstance) {
          (requested_by, word_count, total_count, status)
          VALUES ($1, $2, $3, 'pending')
          RETURNING id`,
-        [request.admin!.adminId, wordCount, count]
+        [request.admin!.sub, wordCount, count]
       );
       const jobDbId = dbRes.rows[0].id;
 
