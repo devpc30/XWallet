@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wallet Admin Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>
+  <style>
+    * { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen">
+<div id="app"></div>
+
+<script>
+const { createApp, ref, computed, onMounted, onUnmounted, reactive } = Vue;
+
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, {
+    ...opts,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
+  return data;
+};
+
+const fmt = (raw, decimals, precision = 6) => {
+  if (!raw || raw === '0') return '0';
+  const s = String(raw).padStart(decimals + 1, '0');
+  const intPart = s.slice(0, -decimals) || '0';
+  const fracPart = s.slice(-decimals).slice(0, precision).replace(/0+$/, '');
+  return fracPart ? intPart + '.' + fracPart : intPart;
+};
+
+createApp({
+  setup() {
+    const admin = ref(null);
+    const route = ref(location.hash.slice(1) || '/');
+    const loading = ref(true);
+
+    window.addEventListener('hashchange', () => { route.value = location.hash.slice(1) || '/'; });
+    const navigate = (path) => { location.hash = path; };
+
+    const checkAuth = async () => {
+      try {
+        const { admin: a } = await api('/auth/me');
+        admin.value = a;
+        if (a.mustChangePassword) navigate('/change-password');
+        else if (route.value === '/login' || route.value === '/') navigate('/dashboard');
+      } catch { admin.value = null; if (route.value !== '/login') navigate('/login'); }
+      finally { loading.value = false; }
+    };
+    onMounted(checkAuth);
+
+    const logout = async () => {
+      await api('/auth/logout', { method: 'POST' }).catch(() => {});
+      admin.value = null;
+      navigate('/login');
+    };
+
+    return { admin, route, loading, navigate, logout, checkAuth };
+  },
+  template: `
+    <div v-if="loading" class="flex items-center justify-center min-h-screen text-slate-500">بارگذاری...</div>
+    <div v-else-if="!admin" class="min-h-screen flex items-center justify-center p-4">
+      <login-page @logged-in="checkAuth"></login-page>
+    </div>
+    <div v-else class="flex min-h-screen">
+      <aside class="w-64 bg-slate-900 text-white p-6 flex flex-col">
+        <div class="text-xl font-bold mb-8">💼 Wallet Admin</div>
+        <nav class="flex-1 space-y-1" v-if="!admin.mustChangePassword">
+          <a href="#/dashboard" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/dashboard' ? 'bg-slate-800' : ''">📊 داشبورد</a>
+          <a href="#/wallets" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/wallets') ? 'bg-slate-800' : ''">💰 ولت‌ها</a>
+          <a href="#/jobs" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/jobs') ? 'bg-slate-800' : ''">⚙️ Jobs</a>
+          <a href="#/benchmark" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/benchmark') ? 'bg-slate-800' : ''">🎓 Benchmark</a>
+          <a href="#/credentials" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/credentials' ? 'bg-slate-800' : ''">🔐 API Keys</a>
+          <a href="#/change-password" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/change-password' ? 'bg-slate-800' : ''">🔑 تغییر رمز</a>
+        </nav>
+        <div class="text-sm text-slate-400 mt-auto pt-4 border-t border-slate-700">
+          <div>{{ admin.username }}</div>
+          <button @click="logout" class="mt-2 text-red-400 hover:text-red-300">خروج</button>
+        </div>
+      </aside>
+      <main class="flex-1 p-8 overflow-auto">
+        <div v-if="admin.mustChangePassword" class="mb-6 p-4 bg-amber-100 border-r-4 border-amber-500 rounded">
+          <strong>⚠ توجه:</strong> از رمز پیش‌فرض استفاده می‌کنی. قبل از هر کار دیگه عوضش کن.
+        </div>
+        <login-page v-if="route === '/login'" @logged-in="checkAuth"></login-page>
+        <change-password-page v-else-if="route === '/change-password'" @changed="checkAuth"></change-password-page>
+        <dashboard-page v-else-if="route === '/dashboard'"></dashboard-page>
+        <wallets-page v-else-if="route === '/wallets'" @open="navigate($event)"></wallets-page>
+        <wallet-detail-page v-else-if="route.startsWith('/wallets/')" :id="route.split('/')[2]" @back="navigate('/wallets')"></wallet-detail-page>
+        <jobs-page v-else-if="route === '/jobs'"></jobs-page>
+        <benchmark-page v-else-if="route === '/benchmark'"></benchmark-page>
+        <credentials-page v-else-if="route === '/credentials'"></credentials-page>
+        <div v-else class="text-slate-500">صفحه یافت نشد</div>
+      </main>
+    </div>
+  `,
+})
+.component('login-page', {
+  emits: ['logged-in'],
+  setup(_, { emit }) {
+    const username = ref('admin'), password = ref(''), error = ref(''), busy = ref(false);
+    const submit = async () => {
+      error.value = ''; busy.value = true;
+      try {
+        await api('/auth/login', { method: 'POST', body: { username: username.value, password: password.value } });
+        emit('logged-in');
+      } catch (e) { error.value = e.status === 423 ? 'اکانت قفل شد (۱۵ دقیقه)' : 'رمز یا نام کاربری اشتباهه'; }
+      finally { busy.value = false; }
+    };
+    return { username, password, error, busy, submit };
+  },
+  template: `
+    <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm">
+      <h1 class="text-2xl font-bold mb-6 text-center">ورود به پنل</h1>
+      <form @submit.prevent="submit" class="space-y-4">
+        <div><label class="block text-sm mb-1">نام کاربری</label><input v-model="username" required class="w-full px-3 py-2 border rounded" /></div>
+        <div><label class="block text-sm mb-1">رمز</label><input v-model="password" type="password" required class="w-full px-3 py-2 border rounded" /></div>
+        <div v-if="error" class="text-red-600 text-sm">{{ error }}</div>
+        <button :disabled="busy" type="submit" class="w-full py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ busy ? '...' : 'ورود' }}</button>
+      </form>
+    </div>
+  `,
+})
+.component('change-password-page', {
+  emits: ['changed'],
+  setup(_, { emit }) {
+    const oldPassword = ref(''), newPassword = ref(''), confirmPassword = ref(''), error = ref(''), busy = ref(false);
+    const submit = async () => {
+      error.value = '';
+      if (newPassword.value !== confirmPassword.value) return error.value = 'رمز جدید و تکرارش یکی نیستن';
+      if (newPassword.value.length < 8) return error.value = 'حداقل ۸ کاراکتر';
+      busy.value = true;
+      try {
+        await api('/auth/change-password', { method: 'POST', body: { oldPassword: oldPassword.value, newPassword: newPassword.value } });
+        emit('changed'); location.hash = '/dashboard';
+      } catch (e) { error.value = e.message || 'خطا'; } finally { busy.value = false; }
+    };
+    return { oldPassword, newPassword, confirmPassword, error, busy, submit };
+  },
+  template: `
+    <div class="max-w-md bg-white rounded-xl shadow p-8">
+      <h2 class="text-xl font-bold mb-6">تغییر رمز</h2>
+      <form @submit.prevent="submit" class="space-y-4">
+        <div><label class="block text-sm mb-1">رمز فعلی</label><input v-model="oldPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
+        <div><label class="block text-sm mb-1">رمز جدید (حداقل ۸)</label><input v-model="newPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
+        <div><label class="block text-sm mb-1">تکرار</label><input v-model="confirmPassword" type="password" required class="w-full px-3 py-2 border rounded" /></div>
+        <div v-if="error" class="text-red-600 text-sm">{{ error }}</div>
+        <button :disabled="busy" class="w-full py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ busy ? '...' : 'تغییر' }}</button>
+      </form>
+    </div>
+  `,
+})
+.component('dashboard-page', {
+  setup() {
+    const stats = ref(null), queueStats = ref(null);
+    let timer = null;
+    const load = async () => {
+      try { const [s, q] = await Promise.all([api('/api/stats'), api('/api/queue-stats')]); stats.value = s; queueStats.value = q; } catch {}
+    };
+    onMounted(() => { load(); timer = setInterval(load, 5000); });
+    onUnmounted(() => clearInterval(timer));
+    return { stats, queueStats };
+  },
+  template: `
+    <div>
+      <h2 class="text-2xl font-bold mb-6">داشبورد</h2>
+      <div v-if="!stats" class="text-slate-500">بارگذاری...</div>
+      <div v-else class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-white p-6 rounded-xl shadow">
+            <div class="text-sm text-slate-500">تعداد ولت‌ها</div>
+            <div class="text-3xl font-bold mt-2">{{ stats.wallets.total }}</div>
+            <div class="text-xs text-slate-400 mt-2">۱۲: {{ stats.wallets.words_12 }} | ۲۴: {{ stats.wallets.words_24 }}</div>
+          </div>
+          <div class="bg-white p-6 rounded-xl shadow md:col-span-2">
+            <div class="text-sm text-slate-500 mb-3">آدرس‌ها به تفکیک شبکه</div>
+            <div class="grid grid-cols-3 gap-3">
+              <div v-for="row in stats.addressesByChain" :key="row.chain" class="text-center">
+                <div class="text-xs text-slate-400">{{ row.chain }}</div>
+                <div class="text-xl font-bold">{{ row.total }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+})
+.component('wallets-page', {
+  emits: ['open'],
+  setup(_, { emit }) {
+    const data = ref({ items: [], total: 0 });
+    const filter = reactive({ wordCount: '' });
+    const load = async () => {
+      const qs = new URLSearchParams({ page: 1, limit: 20 });
+      if (filter.wordCount) qs.set('wordCount', filter.wordCount);
+      data.value = await api('/api/wallets?' + qs);
+    };
+    onMounted(load);
+    return { data, filter, load, open: (id) => emit('open', '/wallets/' + id) };
+  },
+  template: `
+    <div>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">ولت‌ها</h2>
+        <select v-model="filter.wordCount" @change="load" class="px-3 py-2 border rounded bg-white">
+          <option value="">همه</option><option value="12">۱۲</option><option value="24">۲۴</option>
+        </select>
+      </div>
+      <div class="bg-white rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b">
+            <tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">User ID</th><th class="p-3 text-right">کلمات</th><th class="p-3 text-right">BTC</th><th class="p-3 text-right">ETH</th><th class="p-3 text-right">TRON</th><th class="p-3 text-right">ساخته شد</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="w in data.items" :key="w.id" class="border-b hover:bg-slate-50">
+              <td class="p-3 mono">{{ w.id }}</td><td class="p-3 mono">{{ w.user_id }}</td><td class="p-3">{{ w.word_count }}</td>
+              <td class="p-3 mono">{{ w.next_index_btc }}</td><td class="p-3 mono">{{ w.next_index_eth }}</td><td class="p-3 mono">{{ w.next_index_tron }}</td>
+              <td class="p-3 text-slate-500">{{ new Date(w.created_at).toLocaleString('fa-IR') }}</td>
+              <td class="p-3"><button @click="open(w.id)" class="text-blue-600 hover:underline">جزئیات</button></td>
+            </tr>
+            <tr v-if="data.items.length === 0"><td colspan="8" class="p-6 text-center text-slate-400">هیچ ولتی نیست</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-4 text-sm text-slate-500">مجموع: {{ data.total }}</div>
+    </div>
+  `,
+})
+.component('wallet-detail-page', {
+  props: ['id'],
+  emits: ['back'],
+  setup(props, { emit }) {
+    const wallet = ref(null), addresses = ref([]);
+    const showReveal = ref(false), revealPassword = ref(''), revealedMnemonic = ref(''), revealError = ref(''), revealBusy = ref(false);
+    const DECIMALS = { BTC: 8, ETH: 18, TRON: 6 };
+    const load = async () => {
+      const d = await api('/api/wallets/' + props.id);
+      wallet.value = d.wallet; addresses.value = d.addresses;
+    };
+    onMounted(load);
+    const reveal = async () => {
+      revealError.value = ''; revealBusy.value = true;
+      try {
+        const r = await api('/api/wallets/' + props.id + '/reveal', { method: 'POST', body: { password: revealPassword.value } });
+        revealedMnemonic.value = r.mnemonic;
+      } catch (e) { revealError.value = e.message || 'خطا'; }
+      finally { revealBusy.value = false; revealPassword.value = ''; }
+    };
+    const closeReveal = () => { showReveal.value = false; revealedMnemonic.value = ''; revealError.value = ''; revealPassword.value = ''; };
+    return { wallet, addresses, showReveal, revealPassword, revealedMnemonic, revealError, revealBusy, reveal, closeReveal, fmt, DECIMALS, back: () => emit('back') };
+  },
+  template: `
+    <div v-if="!wallet" class="text-slate-500">بارگذاری...</div>
+    <div v-else>
+      <button @click="back" class="mb-4 text-blue-600 hover:underline">← برگشت</button>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">ولت #{{ wallet.id }}</h2>
+        <button @click="showReveal = true" class="px-4 py-2 bg-red-600 text-white rounded">🔓 نمایش Mnemonic</button>
+      </div>
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <div class="grid grid-cols-2 gap-4 text-sm">
+          <div><span class="text-slate-500">User ID:</span> <span class="mono">{{ wallet.user_id }}</span></div>
+          <div><span class="text-slate-500">کلمات:</span> {{ wallet.word_count }}</div>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b">
+            <tr><th class="p-3 text-right">شبکه</th><th class="p-3 text-right">Index</th><th class="p-3 text-right">آدرس</th><th class="p-3 text-right">Native</th><th class="p-3 text-right">USDT</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in addresses" :key="a.id" class="border-b">
+              <td class="p-3"><span class="px-2 py-0.5 rounded bg-slate-100 text-xs">{{ a.chain }}</span></td>
+              <td class="p-3 mono">{{ a.derivation_index }}</td>
+              <td class="p-3 mono text-xs break-all">{{ a.address }}</td>
+              <td class="p-3 mono">{{ fmt(a.native_balance, DECIMALS[a.chain]) }}</td>
+              <td class="p-3 mono">{{ a.chain === 'BTC' ? '—' : fmt(a.usdt_balance, 6) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="showReveal" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+          <h3 class="text-lg font-bold mb-4">🔓 نمایش Mnemonic</h3>
+          <div v-if="!revealedMnemonic">
+            <p class="text-sm text-slate-600 mb-4">رمز ادمین رو دوباره وارد کن.</p>
+            <input v-model="revealPassword" type="password" placeholder="رمز ادمین" class="w-full px-3 py-2 border rounded mb-3" />
+            <div v-if="revealError" class="text-red-600 text-sm mb-3">{{ revealError }}</div>
+            <div class="flex gap-2 justify-end">
+              <button @click="closeReveal" class="px-4 py-2 border rounded">انصراف</button>
+              <button @click="reveal" :disabled="revealBusy || !revealPassword" class="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50">{{ revealBusy ? '...' : 'نمایش' }}</button>
+            </div>
+          </div>
+          <div v-else>
+            <div class="bg-slate-100 p-4 rounded mono text-sm break-all">{{ revealedMnemonic }}</div>
+            <button @click="closeReveal" class="mt-4 w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+})
+.component('jobs-page', {
+  setup() {
+    const jobs = ref({ items: [] });
+    const showNew = ref(false);
+    const form = reactive({ count: 100, wordCount: 12, addressesPerWallet: 1, startUserId: '' });
+    const newError = ref(''), newBusy = ref(false);
+    let timer = null;
+    const load = async () => { try { jobs.value = await api('/api/jobs?limit=30'); } catch {} };
+    onMounted(() => { load(); timer = setInterval(load, 3000); });
+    onUnmounted(() => clearInterval(timer));
+    const submit = async () => {
+      newError.value = ''; newBusy.value = true;
+      try {
+        const body = { count: Number(form.count), wordCount: Number(form.wordCount), addressesPerWallet: Number(form.addressesPerWallet) };
+        if (form.startUserId) body.startUserId = Number(form.startUserId);
+        await api('/api/jobs/generate', { method: 'POST', body });
+        showNew.value = false; load();
+      } catch (e) { newError.value = e.message || 'خطا'; } finally { newBusy.value = false; }
+    };
+    const statusColor = (s) => ({
+      pending: 'bg-slate-200', running: 'bg-blue-100 text-blue-800',
+      completed: 'bg-emerald-100 text-emerald-800', partial: 'bg-amber-100 text-amber-800',
+      failed: 'bg-red-100 text-red-800',
+    }[s] || 'bg-slate-100');
+    return { jobs, showNew, form, newError, newBusy, submit, statusColor };
+  },
+  template: `
+    <div>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">Jobs</h2>
+        <button @click="showNew = true" class="px-4 py-2 bg-blue-600 text-white rounded">➕ تولید batch</button>
+      </div>
+      <div class="bg-white rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">کلمات</th><th class="p-3 text-right">پیشرفت</th><th class="p-3 text-right">وضعیت</th></tr></thead>
+          <tbody>
+            <tr v-for="j in jobs.items" :key="j.id" class="border-b">
+              <td class="p-3 mono">{{ j.id }}</td><td class="p-3">{{ j.word_count }}</td>
+              <td class="p-3"><div class="flex items-center gap-2"><div class="flex-1 bg-slate-200 rounded-full h-2 min-w-[100px]"><div class="bg-blue-500 h-2 rounded-full" :style="{ width: (j.completed / j.total_count * 100) + '%' }"></div></div><span class="text-xs mono">{{ j.completed }}/{{ j.total_count }}</span></div></td>
+              <td class="p-3"><span class="px-2 py-0.5 rounded text-xs" :class="statusColor(j.status)">{{ j.status }}</span></td>
+            </tr>
+            <tr v-if="jobs.items.length === 0"><td colspan="4" class="p-6 text-center text-slate-400">هیچ job‌ای نیست</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="showNew" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+          <h3 class="text-lg font-bold mb-4">Job جدید</h3>
+          <form @submit.prevent="submit" class="space-y-3">
+            <div><label class="block text-sm mb-1">تعداد</label><input v-model="form.count" type="number" min="1" max="100000" required class="w-full px-3 py-2 border rounded" /></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="block text-sm mb-1">کلمات</label><select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white"><option :value="12">۱۲</option><option :value="24">۲۴</option></select></div>
+              <div><label class="block text-sm mb-1">آدرس</label><input v-model="form.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" /></div>
+            </div>
+            <div><label class="block text-sm mb-1">User ID شروع</label><input v-model="form.startUserId" type="number" placeholder="اختیاری" class="w-full px-3 py-2 border rounded" /></div>
+            <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
+            <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'شروع' }}</button></div>
+          </form>
+        </div>
+      </div>
+    </div>
+  `,
+})
+.component('benchmark-page', {
+  setup() {
+    const current = ref({ running: false });
+    const runs = ref([]);
+    const math = ref(null);
+    const form = reactive({ targetCount: 10000, wordCount: 12, addressesPerMnemonic: 3, chains: ['BTC', 'ETH', 'TRON'] });
+    const error = ref(''), busy = ref(false);
+    let timer = null;
+
+    const load = async () => {
+      try {
+        const [c, r, m] = await Promise.all([
+          api('/api/benchmark/current'),
+          api('/api/benchmark/runs?limit=10'),
+          math.value ? Promise.resolve({ ...math.value }) : api('/api/benchmark/math'),
+        ]);
+        current.value = c; runs.value = r.items; math.value = m;
+      } catch {}
+    };
+
+    onMounted(() => { load(); timer = setInterval(load, 2000); });
+    onUnmounted(() => clearInterval(timer));
+
+    const start = async () => {
+      error.value = ''; busy.value = true;
+      try {
+        await api('/api/benchmark/start', { method: 'POST', body: {
+          targetCount: Number(form.targetCount),
+          wordCount: Number(form.wordCount),
+          addressesPerMnemonic: Number(form.addressesPerMnemonic),
+          chains: form.chains,
+        }});
+        load();
+      } catch (e) { error.value = e.message || 'خطا'; } finally { busy.value = false; }
+    };
+
+    const stop = async () => {
+      await api('/api/benchmark/stop', { method: 'POST' });
+      load();
+    };
+
+    const toggleChain = (c) => {
+      const i = form.chains.indexOf(c);
+      if (i >= 0) form.chains.splice(i, 1); else form.chains.push(c);
+    };
+
+    const progress = computed(() => {
+      if (!current.value.running) return 0;
+      const r = current.value.run;
+      return Math.round((r.checked_count / r.target_count) * 100);
+    });
+
+    const statusColor = (s) => ({
+      running: 'bg-blue-100 text-blue-800',
+      completed: 'bg-emerald-100 text-emerald-800',
+      stopped: 'bg-amber-100 text-amber-800',
+      failed: 'bg-red-100 text-red-800',
+    }[s] || 'bg-slate-100');
+
+    return { current, runs, math, form, error, busy, start, stop, toggleChain, progress, statusColor };
+  },
+  template: `
+    <div>
+      <h2 class="text-2xl font-bold mb-2">🎓 Educational Benchmark</h2>
+      <p class="text-sm text-slate-600 mb-6">ابزار آموزشی برای نشون دادن اینکه brute-force ولت ریاضیاً غیرممکنه.</p>
+
+      <!-- Math box -->
+      <div v-if="math" class="bg-gradient-to-br from-slate-900 to-slate-800 text-white p-6 rounded-xl mb-6">
+        <div class="text-sm text-slate-300 mb-2">ریاضی پشت این ماجرا</div>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+          <div>
+            <div class="text-xs text-slate-400">فضای جستجو ۱۲ کلمه</div>
+            <div class="mono text-amber-300">{{ math.searchSpace12Words }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-slate-400">فضای جستجو ۲۴ کلمه</div>
+            <div class="mono text-amber-300">{{ math.searchSpace24Words }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-slate-400">اتم‌های کل جهان</div>
+            <div class="mono text-slate-300">{{ math.atomsInUniverse }}</div>
+          </div>
+        </div>
+        <div class="mt-4 text-sm text-slate-300 leading-relaxed">{{ math.explanation.fa }}</div>
+        <div class="mt-4 p-3 bg-slate-950/50 rounded text-xs">
+          <div class="text-slate-400 mb-1">احتمال پیدا کردن با حداکثر ({{ math.maxTarget.toLocaleString() }}) تست:</div>
+          <div class="mono text-amber-300">{{ math.probabilityForMaxTarget.value }}</div>
+          <div class="text-slate-400 mt-1">≈ {{ math.probabilityForMaxTarget.comparison }}</div>
+        </div>
+      </div>
+
+      <!-- Current run -->
+      <div v-if="current.running" class="bg-white p-6 rounded-xl shadow mb-6">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-bold">Run #{{ current.run.id }} — در حال اجرا</h3>
+          <button @click="stop" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">⏹ Stop</button>
+        </div>
+        <div class="mb-3">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-sm">{{ current.run.checked_count.toLocaleString() }} / {{ current.run.target_count.toLocaleString() }}</span>
+            <span class="text-sm mono">{{ progress }}%</span>
+          </div>
+          <div class="bg-slate-200 rounded-full h-3">
+            <div class="bg-blue-500 h-3 rounded-full transition-all" :style="{ width: progress + '%' }"></div>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-4 text-sm">
+          <div><div class="text-slate-500">سرعت</div><div class="mono font-bold">{{ current.run.avg_rate_per_sec }} /sec</div></div>
+          <div><div class="text-slate-500">Hits</div><div class="mono font-bold" :class="current.run.hit_count > 0 ? 'text-amber-600' : 'text-slate-400'">{{ current.run.hit_count }}</div></div>
+          <div><div class="text-slate-500">Chains</div><div class="mono text-xs">{{ current.run.chains.join(', ') }}</div></div>
+        </div>
+      </div>
+
+      <!-- Start form -->
+      <div v-else class="bg-white p-6 rounded-xl shadow mb-6">
+        <h3 class="font-bold mb-4">شروع Benchmark جدید</h3>
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm mb-1">تعداد mnemonic (حداکثر {{ math ? math.maxTarget.toLocaleString() : '100,000' }})</label>
+            <input v-model="form.targetCount" type="number" min="1" :max="math ? math.maxTarget : 100000" class="w-full px-3 py-2 border rounded" />
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm mb-1">تعداد کلمات</label>
+              <select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white">
+                <option :value="12">۱۲ کلمه</option>
+                <option :value="24">۲۴ کلمه</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm mb-1">آدرس per mnemonic</label>
+              <input v-model="form.addressesPerMnemonic" type="number" min="1" max="10" class="w-full px-3 py-2 border rounded" />
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm mb-2">Chains</label>
+            <div class="flex gap-2">
+              <button v-for="c in ['BTC', 'ETH', 'TRON']" :key="c" @click="toggleChain(c)"
+                class="px-4 py-2 rounded border"
+                :class="form.chains.includes(c) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white'">
+                {{ c }}
+              </button>
+            </div>
+          </div>
+          <div v-if="error" class="text-red-600 text-sm">{{ error }}</div>
+          <button @click="start" :disabled="busy || form.chains.length === 0" class="w-full py-3 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 font-bold">
+            ▶ {{ busy ? '...' : 'Start Benchmark' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- History -->
+      <h3 class="font-bold mb-3">تاریخچه</h3>
+      <div class="bg-white rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b">
+            <tr>
+              <th class="p-3 text-right">ID</th>
+              <th class="p-3 text-right">هدف</th>
+              <th class="p-3 text-right">چک‌شده</th>
+              <th class="p-3 text-right">Hits</th>
+              <th class="p-3 text-right">سرعت</th>
+              <th class="p-3 text-right">مدت</th>
+              <th class="p-3 text-right">وضعیت</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in runs" :key="r.id" class="border-b hover:bg-slate-50">
+              <td class="p-3 mono">{{ r.id }}</td>
+              <td class="p-3 mono">{{ r.target_count.toLocaleString() }}</td>
+              <td class="p-3 mono">{{ r.checked_count.toLocaleString() }}</td>
+              <td class="p-3 mono" :class="r.hit_count > 0 ? 'text-amber-600 font-bold' : 'text-slate-400'">{{ r.hit_count }}</td>
+              <td class="p-3 mono text-xs">{{ r.avg_rate_per_sec || '—' }} /sec</td>
+              <td class="p-3 mono text-xs">{{ r.duration_ms ? (r.duration_ms / 1000).toFixed(1) + 's' : '—' }}</td>
+              <td class="p-3"><span class="px-2 py-0.5 rounded text-xs" :class="statusColor(r.status)">{{ r.status }}</span></td>
+            </tr>
+            <tr v-if="runs.length === 0"><td colspan="7" class="p-6 text-center text-slate-400">هیچ run‌ای نیست</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `,
+})
+.component('credentials-page', {
+  setup() {
+    const items = ref([]);
+    const showNew = ref(false);
+    const form = reactive({ provider: 'trongrid', value: '', label: '' });
+    const newError = ref(''), newBusy = ref(false);
+    let timer = null;
+    const load = async () => { try { items.value = (await api('/api/credentials')).items; } catch {} };
+    onMounted(() => { load(); timer = setInterval(load, 10000); });
+    onUnmounted(() => clearInterval(timer));
+    const submit = async () => {
+      newError.value = ''; newBusy.value = true;
+      try {
+        await api('/api/credentials', { method: 'POST', body: { provider: form.provider, value: form.value.trim(), label: form.label.trim() || undefined }});
+        form.value = ''; form.label = ''; showNew.value = false; load();
+      } catch (e) { newError.value = e.message || 'خطا'; } finally { newBusy.value = false; }
+    };
+    const remove = async (id) => { if (!confirm('حذف؟')) return; await api('/api/credentials/' + id, { method: 'DELETE' }); load(); };
+    const toggle = async (cred) => { await api('/api/credentials/' + cred.id + '/toggle', { method: 'POST', body: { active: !cred.isActive } }); load(); };
+    const unblock = async (id) => { await api('/api/credentials/' + id + '/unblock', { method: 'POST' }); load(); };
+    const providerLabel = (p) => ({ trongrid: 'TronGrid', eth_rpc: 'ETH RPC', btc_api: 'BTC API' }[p] || p);
+    const isBlocked = (cred) => cred.rateLimitedUntil && new Date(cred.rateLimitedUntil) > new Date();
+    const grouped = computed(() => {
+      const g = { trongrid: [], eth_rpc: [], btc_api: [] };
+      for (const i of items.value) if (g[i.provider]) g[i.provider].push(i);
+      return g;
+    });
+    return { showNew, form, newError, newBusy, submit, remove, toggle, unblock, providerLabel, isBlocked, grouped };
+  },
+  template: `
+    <div>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">🔐 API Keys</h2>
+        <button @click="showNew = true" class="px-4 py-2 bg-blue-600 text-white rounded">➕ افزودن</button>
+      </div>
+      <div v-for="provider in ['trongrid', 'eth_rpc', 'btc_api']" :key="provider" class="mb-6">
+        <h3 class="font-bold mb-3">{{ providerLabel(provider) }} ({{ grouped[provider].length }})</h3>
+        <div class="bg-white rounded-xl shadow overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">برچسب</th><th class="p-3 text-right">مقدار</th><th class="p-3 text-right">موفق</th><th class="p-3 text-right">ناموفق</th><th class="p-3 text-right">وضعیت</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="c in grouped[provider]" :key="c.id" class="border-b">
+                <td class="p-3 mono">{{ c.id }}</td><td class="p-3">{{ c.label || '—' }}</td>
+                <td class="p-3 mono text-xs">{{ c.valuePreview }}</td>
+                <td class="p-3 mono text-emerald-700">{{ c.successCount }}</td>
+                <td class="p-3 mono text-red-700">{{ c.failureCount }}</td>
+                <td class="p-3"><span v-if="isBlocked(c)" class="px-2 py-0.5 rounded text-xs bg-amber-100">⏸ blocked</span><span v-else-if="c.isActive" class="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800">✔</span><span v-else class="px-2 py-0.5 rounded text-xs bg-slate-200">غیرفعال</span></td>
+                <td class="p-3 text-xs whitespace-nowrap">
+                  <button v-if="isBlocked(c)" @click="unblock(c.id)" class="text-amber-600 me-2">unblock</button>
+                  <button @click="toggle(c)" class="text-blue-600 me-2">{{ c.isActive ? 'غیرفعال' : 'فعال' }}</button>
+                  <button @click="remove(c.id)" class="text-red-600">حذف</button>
+                </td>
+              </tr>
+              <tr v-if="grouped[provider].length === 0"><td colspan="7" class="p-4 text-center text-slate-400 text-sm">هیچ کلیدی نیست</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div v-if="showNew" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+          <h3 class="text-lg font-bold mb-4">افزودن</h3>
+          <form @submit.prevent="submit" class="space-y-3">
+            <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option></select></div>
+            <div><label class="block text-sm mb-1">مقدار</label><input v-model="form.value" type="text" required class="w-full px-3 py-2 border rounded mono text-xs" /></div>
+            <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
+            <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
+            <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy || !form.value.trim()" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'افزودن' }}</button></div>
+          </form>
+        </div>
+      </div>
+    </div>
+  `,
+})
+.mount('#app');
+</script>
+</body>
+</html>
