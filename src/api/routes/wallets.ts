@@ -11,9 +11,11 @@ import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
 import {
   createWallet,
+  importWallet,
   getNewDepositAddress,
   revealMnemonic,
   WalletNotFoundError,
+  InvalidMnemonicError,
 } from '../../services/wallet-service.js';
 import type { Chain } from '../../wallet/derivation.js';
 import { sanitizeAuditDetails } from '../../util/sanitize.js';
@@ -145,6 +147,56 @@ export default async function walletRoutes(fastify: FastifyInstance) {
         );
         return { wallet_id: result.walletId, addresses: result.addresses };
       } catch (e: any) {
+        if (e.code === '23505') {
+          return reply.code(409).send({ error: 'این user_id قبلاً ولت داره' });
+        }
+        throw e;
+      }
+    }
+  );
+
+  // POST /import (import existing wallet from user-provided mnemonic)
+  fastify.post<{
+    Body: { user_id: number; mnemonic: string; initial_address_count?: number };
+  }>(
+    '/import',
+    {
+      preHandler: authed,
+      schema: {
+        body: {
+          type: 'object',
+          required: ['user_id', 'mnemonic'],
+          properties: {
+            user_id: { type: 'integer', minimum: 1 },
+            mnemonic: { type: 'string', minLength: 1, maxLength: 1000 },
+            initial_address_count: { type: 'integer', minimum: 1, maximum: 100 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      try {
+        const result = await importWallet({
+          userId: req.body.user_id,
+          mnemonic: req.body.mnemonic,
+          initialAddressCount: req.body.initial_address_count ?? 1,
+        });
+        await pool.query(
+          `INSERT INTO admin_audit_log
+             (admin_id, action, target_type, target_id, success, details, ip_address)
+           VALUES ($1, 'import_wallet', 'wallet', $2, true, $3, $4)`,
+          [
+            req.admin!.sub,
+            result.walletId,
+            sanitizeAuditDetails({ user_id: req.body.user_id }),
+            req.ip,
+          ]
+        );
+        return { wallet_id: result.walletId, addresses: result.addresses };
+      } catch (e: any) {
+        if (e instanceof InvalidMnemonicError) {
+          return reply.code(e.statusCode).send({ error: e.code, message: e.message });
+        }
         if (e.code === '23505') {
           return reply.code(409).send({ error: 'این user_id قبلاً ولت داره' });
         }

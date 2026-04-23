@@ -19,6 +19,8 @@ import { pool } from '../db/pool.js';
 import {
   generateMnemonic,
   deriveMany,
+  isValidMnemonic,
+  normalizeMnemonic,
   type Chain,
   type DerivedAddress,
 } from '../wallet/derivation.js';
@@ -37,6 +39,15 @@ export class WalletNotFoundError extends Error {
   constructor(walletId: number) {
     super(`wallet ${walletId} not found`);
     this.name = 'WalletNotFoundError';
+  }
+}
+
+export class InvalidMnemonicError extends Error {
+  readonly code = 'INVALID_MNEMONIC';
+  readonly statusCode = 400;
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'InvalidMnemonicError';
   }
 }
 
@@ -61,6 +72,50 @@ export async function createWallet(
   }
 
   const mnemonic = generateMnemonic(wordCount);
+  return persistWallet(userId, mnemonic, wordCount, initialAddressCount);
+}
+
+export interface ImportWalletOptions {
+  userId: number;
+  mnemonic: string;
+  initialAddressCount?: number;
+}
+
+/**
+ * Import یه wallet موجود از mnemonic کاربر.
+ *
+ * نرمال‌سازی و validation:
+ *   - NFKD + trim + collapse whitespace + lowercase (normalizeMnemonic)
+ *   - تعداد کلمات: فقط 12 یا 24
+ *   - checksum + wordlist (bip39.validateMnemonic)
+ */
+export async function importWallet(
+  opts: ImportWalletOptions
+): Promise<CreateWalletResult> {
+  const { userId, mnemonic: raw, initialAddressCount = 1 } = opts;
+
+  if (initialAddressCount < 1 || initialAddressCount > 100) {
+    throw new Error('initialAddressCount باید بین 1 و 100 باشه');
+  }
+
+  const normalized = normalizeMnemonic(raw);
+  const words = normalized.length === 0 ? 0 : normalized.split(' ').length;
+  if (words !== 12 && words !== 24) {
+    throw new InvalidMnemonicError('فقط mnemonic ۱۲ یا ۲۴ کلمه‌ای پشتیبانی می‌شه');
+  }
+  if (!isValidMnemonic(normalized)) {
+    throw new InvalidMnemonicError('mnemonic نامعتبره (checksum یا wordlist)');
+  }
+
+  return persistWallet(userId, normalized, words, initialAddressCount);
+}
+
+async function persistWallet(
+  userId: number,
+  mnemonic: string,
+  wordCount: 12 | 24,
+  initialAddressCount: number
+): Promise<CreateWalletResult> {
   const requests = ALL_CHAINS.map((c) => ({
     chain: c,
     fromIndex: 0,
