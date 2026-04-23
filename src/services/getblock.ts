@@ -4,9 +4,9 @@
  * GetBlock یه Web3 RPC Provider هست که روی یه endpoint مشترک توکن
  * دسترسی رو تو URL جاسازی می‌کنه:
  *
- *   https://go.getblock.io/<ACCESS_TOKEN>/
- *   https://go.getblock.us/<ACCESS_TOKEN>/   (US region)
- *   https://go.getblock.asia/<ACCESS_TOKEN>/ (Asia region)
+ *   https://go.getblock.io/<ACCESS_TOKEN>/    (EU — پیش‌فرض)
+ *   https://go.getblock.us/<ACCESS_TOKEN>/    (US)
+ *   https://go.getblock.asia/<ACCESS_TOKEN>/  (Asia)
  *
  * هر توکن روی یه (chain, network, rpc_type) بسته می‌شه. تو کانفیگی که
  * GetBlock می‌ده (shared configuration file) شکل این‌طوریه:
@@ -18,17 +18,30 @@
  *     }
  *   }
  *
- * این ماژول:
- *   1. کانفیگ رو parse می‌کنه و flat list از توکن‌ها می‌ده
- *   2. URL نهایی رو می‌سازه (با رعایت region)
- *   3. یه JSON-RPC client ساده در اختیار می‌ذاره
- *
  * مرجع:
  *   https://docs.getblock.io/getting-started/authentication-with-access-tokens
  *   https://getblock.io/docs/guides/how-to-use-getblock-configuration-files/
+ *
+ * ─── TODO(getblock-btc) ────────────────────────────────────────────────
+ * فعلاً BTC entries رد می‌شن (ن zap در balance flow بر پایهٔ mempool.space
+ * هست، و هیچ broadcast flow ای که نیاز به sendrawtransaction داشته باشه
+ * نداریم). وقتی broadcast اضافه شد، provider='btc_rpc' رو برگردون و
+ * sendrawtransaction/gettxout رو به این ماژول وصل کن. balance lookup
+ * by-address همچنان باید روی mempool.space بمونه (BTC Core RPC بدون
+ * -addressindex امکان لیست‌گرفتن بالانس یه آدرس رو نداره).
+ * ────────────────────────────────────────────────────────────────────────
  */
 
 import { readFile } from 'node:fs/promises';
+import {
+  addCredential,
+  invalidateCache,
+  listCredentials,
+  markError,
+  markRateLimited,
+  setActive,
+  type Provider,
+} from './credentials-service.js';
 
 // ─── Types ───
 
@@ -53,7 +66,35 @@ export interface GetBlockEntry {
   token: string;
 }
 
-// ─── Config parsing ───
+// ─── Token validation ───────────────────────────────────────────────────
+
+/**
+ * شکل Access Token های GetBlock: ۳۲ کاراکتر hex (lower یا upper).
+ * مرجع: نمونه‌های docs + کانفیگ shared که کاربر می‌ده (e.g.
+ * "499ae68ced964da691b52dbbc40a65b9") دقیقاً ۳۲ hex char هست.
+ */
+const GETBLOCK_TOKEN_RE = /^[a-f0-9]{32}$/i;
+
+export function isValidGetBlockToken(token: unknown): boolean {
+  return typeof token === 'string' && GETBLOCK_TOKEN_RE.test(token);
+}
+
+// ─── URL redaction (ایمنی لاگ) ──────────────────────────────────────────
+
+/**
+ * توکن GetBlock رو تو یه URL با … می‌پوشونه که لاگ‌ها leak نکنن.
+ *   قبل: https://go.getblock.io/499ae68ced964da691b52dbbc40a65b9/
+ *   بعد:  https://go.getblock.io/499ae68c…/
+ */
+export function redactGetBlockUrl(url: string): string {
+  if (typeof url !== 'string') return url;
+  return url.replace(
+    /(https:\/\/[a-z]+\.getblock\.(?:io|us|asia)\/)([a-f0-9]{8})[a-f0-9]{24}(\/?)/gi,
+    '$1$2…$3'
+  );
+}
+
+// ─── Region ─────────────────────────────────────────────────────────────
 
 const REGION_BASES: Record<GetBlockRegion, string> = {
   io: 'https://go.getblock.io',
@@ -61,9 +102,6 @@ const REGION_BASES: Record<GetBlockRegion, string> = {
   asia: 'https://go.getblock.asia',
 };
 
-/**
- * Region مورد استفاده رو از env می‌خونه. پیش‌فرض 'io' (EU/Frankfurt).
- */
 export function resolveRegion(): GetBlockRegion {
   const v = (process.env.GETBLOCK_REGION ?? 'io').toLowerCase();
   if (v === 'us' || v === 'asia' || v === 'io') return v;
@@ -71,24 +109,58 @@ export function resolveRegion(): GetBlockRegion {
 }
 
 /**
+ * Reachability check برای یه region. endpoint base رو با HEAD می‌زنیم؛
+ * هر جواب HTTP (حتی 403) یعنی host resolve و TLS OK — فقط NXDOMAIN
+ * یا timeout بد تلقی می‌شه.
+ */
+export async function isRegionReachable(region: GetBlockRegion, timeoutMs = 5_000): Promise<boolean> {
+  const base = REGION_BASES[region];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/`, { method: 'GET', signal: controller.signal });
+    return res.status > 0;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * تو startup فراخوانی می‌شه. Region کانفیگ‌شده رو چک می‌کنه؛ اگه
+ * unreachable بود، به 'io' fallback می‌کنه.
+ */
+export async function verifyRegionOnBoot(logger?: { info: (m: string) => void; warn: (m: string) => void }): Promise<GetBlockRegion> {
+  const requested = resolveRegion();
+  const ok = await isRegionReachable(requested);
+  const log = logger ?? { info: (m) => console.log(m), warn: (m) => console.warn(m) };
+  if (ok) {
+    log.info(`[getblock] region '${requested}' reachable (${REGION_BASES[requested]})`);
+    return requested;
+  }
+  log.warn(`[getblock] region '${requested}' unreachable — falling back to 'io'`);
+  return 'io';
+}
+
+// ─── URL builder ────────────────────────────────────────────────────────
+
+/**
  * URL نهایی endpoint برای یه توکن می‌سازه.
- *
- * مثال:
- *   buildEndpointUrl('abc123') → "https://go.getblock.io/abc123/"
  */
 export function buildEndpointUrl(token: string, region: GetBlockRegion = resolveRegion()): string {
-  if (!token || typeof token !== 'string') {
-    throw new Error('GetBlock token نامعتبر است');
-  }
-  // ممیزی ساده: توکن نباید slash داشته باشه (جلوی URL-injection)
-  if (/[\s/?#]/.test(token)) {
-    throw new Error('GetBlock token شامل کاراکتر غیرمجاز است');
+  if (!isValidGetBlockToken(token)) {
+    throw new Error('GetBlock token نامعتبر است (باید ۳۲ کاراکتر hex باشد)');
   }
   return `${REGION_BASES[region]}/${token}/`;
 }
 
+// ─── Config parsing ─────────────────────────────────────────────────────
+
 /**
  * فایل کانفیگ JSON رو parse می‌کنه و تمام توکن‌ها رو flat برمی‌گردونه.
+ * validation اینجا انجام نمی‌شه — فقط ساختار؛ توکن‌های نامعتبر تو
+ * import step detect می‌شن.
  */
 export function parseConfig(raw: string | object): GetBlockEntry[] {
   const cfg: GetBlockConfigFile =
@@ -136,7 +208,40 @@ export async function loadConfig(filePath?: string): Promise<GetBlockEntry[]> {
   return [];
 }
 
-// ─── JSON-RPC client ───
+// ─── Entry → credential mapping ─────────────────────────────────────────
+
+/**
+ * eth jsonRpc → 'eth_rpc' (تو balance rotation موجود استفاده می‌شه)
+ * btc / سایر → null (هیچ consumer ای ندارن — رجوع به TODO بالا)
+ */
+export function providerForEntry(entry: GetBlockEntry): Provider | null {
+  if (entry.rpcType !== 'jsonRpc') return null;
+  if (entry.network !== 'mainnet') return null;
+  if (entry.chain === 'eth') return 'eth_rpc';
+  return null;
+}
+
+export function defaultLabel(entry: GetBlockEntry): string {
+  return `GetBlock ${entry.chain}-${entry.network}`;
+}
+
+// ─── Errors ─────────────────────────────────────────────────────────────
+
+export class GetBlockThrottled extends Error {
+  constructor(message = 'GetBlock rate-limited (429)') {
+    super(message);
+    this.name = 'GetBlockThrottled';
+  }
+}
+
+export class GetBlockAuthError extends Error {
+  constructor(status: number, message?: string) {
+    super(message ?? `GetBlock auth failed (${status})`);
+    this.name = 'GetBlockAuthError';
+  }
+}
+
+// ─── JSON-RPC client ────────────────────────────────────────────────────
 
 export interface JsonRpcRequest {
   method: string;
@@ -155,8 +260,9 @@ export interface JsonRpcResponse<T = unknown> {
 /**
  * یه JSON-RPC call ساده به GetBlock می‌زنه.
  *
- * اگه endpoint با 429 جواب بده، کالر باید با توکن دیگه rotate کنه.
- * این تابع هیچ rotation ای نمی‌کنه — صرفاً یه fetch wrapper هست.
+ * Caller باید GetBlockThrottled و GetBlockAuthError رو catch کنه و طبق
+ * policy (markRateLimited / setActive=false) به credentials-service خبر
+ * بده. این تابع خودش side-effect رو DB نداره — صرفاً fetch+classify.
  */
 export async function jsonRpcCall<T = unknown>(
   endpointUrl: string,
@@ -172,6 +278,8 @@ export async function jsonRpcCall<T = unknown>(
     else signal.addEventListener('abort', () => controller.abort(), { once: true });
   }
 
+  const safeUrl = redactGetBlockUrl(endpointUrl);
+
   try {
     const res = await fetch(endpointUrl, {
       method: 'POST',
@@ -186,25 +294,26 @@ export async function jsonRpcCall<T = unknown>(
     });
 
     if (res.status === 429) {
-      const err = new Error(`GetBlock rate-limited (429)`) as Error & { status?: number };
-      err.status = 429;
-      throw err;
+      throw new GetBlockThrottled(`GetBlock rate-limited (429) on ${safeUrl}`);
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new GetBlockAuthError(res.status, `GetBlock auth failed ${res.status} on ${safeUrl}`);
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      const err = new Error(
-        `GetBlock HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`
-      ) as Error & { status?: number };
-      err.status = res.status;
-      throw err;
+      throw new Error(
+        `GetBlock HTTP ${res.status} on ${safeUrl}${text ? `: ${text.slice(0, 200)}` : ''}`
+      );
     }
 
     const body = (await res.json()) as JsonRpcResponse<T>;
     if (body.error) {
-      throw new Error(`GetBlock RPC error ${body.error.code}: ${body.error.message}`);
+      throw new Error(
+        `GetBlock RPC error ${body.error.code} on ${safeUrl}: ${body.error.message}`
+      );
     }
     if (body.result === undefined) {
-      throw new Error('GetBlock RPC: پاسخ بدون result');
+      throw new Error(`GetBlock RPC: پاسخ بدون result (${safeUrl})`);
     }
     return body.result;
   } finally {
@@ -212,36 +321,132 @@ export async function jsonRpcCall<T = unknown>(
   }
 }
 
-// ─── Helpers for mapping GetBlock entries to our credential provider schema ───
-
 /**
- * provider ای که تو api_credentials برای یه entry استفاده می‌شه.
+ * Wrapper خودکار که credential رو از DB rotate می‌کنه و خطاهای 429/401/403
+ * رو به مارکرهای credentials-service ترجمه می‌کنه. Balance checker ها
+ * می‌تونن مستقیم ازش استفاده کنن.
  *
- *   eth jsonRpc  → 'eth_rpc'  (سازگار با ETH balance flow موجود)
- *   btc jsonRpc  → 'btc_rpc'  (provider جدید؛ موجب conflict با btc_api نمی‌شه)
- *
- * برای entry هایی که هیچ mapping ندارن، null می‌ده. caller باید skip کنه.
+ * NOTE: کالر باید pickCredential('eth_rpc') خودش بزنه اگه می‌خواد کنترل
+ * دقیق داشته باشه. این متد یه ابزار کمکی هست.
  */
-export function providerForEntry(entry: GetBlockEntry): 'eth_rpc' | 'btc_rpc' | null {
-  if (entry.rpcType !== 'jsonRpc') return null;
-  if (entry.network !== 'mainnet') return null; // فعلاً فقط mainnet
-  if (entry.chain === 'eth') return 'eth_rpc';
-  if (entry.chain === 'btc') return 'btc_rpc';
-  return null;
+export async function classifyAndMark(
+  credId: number,
+  err: unknown,
+  cooldownSeconds = 60
+): Promise<'throttled' | 'auth_failed' | 'error' | 'unknown'> {
+  if (err instanceof GetBlockThrottled) {
+    await markRateLimited(credId, cooldownSeconds);
+    return 'throttled';
+  }
+  if (err instanceof GetBlockAuthError) {
+    await setActive(credId, false);
+    await markError(credId, err.message);
+    return 'auth_failed';
+  }
+  if (err instanceof Error) {
+    await markError(credId, err.message);
+    return 'error';
+  }
+  return 'unknown';
+}
+
+// ─── Import (shared by CLI and admin route) ─────────────────────────────
+
+export interface ImportResult {
+  added: number;
+  skipped: number;         // تکراری یا unsupported (مثل btc فعلاً)
+  invalid: string[];       // آرایه پیام خطا برای توکن‌های نامعتبر
+  skippedBtc: number;      // جداگانه برای clarity
+}
+
+export interface ImportOptions {
+  adminId: number;
+  skipExisting?: boolean;
+  /** فقط برای تست: لاگر مصنوعی */
+  logger?: { info: (m: string) => void; warn: (m: string) => void };
 }
 
 /**
- * مقدار value ای که تو DB ذخیره می‌شه. برای eth همون URL کامل هست تا با
- * JsonRpcProvider ethers مستقیم کار کنه. برای btc هم URL کامل ذخیره می‌کنیم
- * تا اگه بعداً JSON-RPC BTC خواستیم استفاده کنیم، آماده باشه.
+ * هستهٔ import. هم CLI script و هم admin route باید از این فانکشن
+ * استفاده کنن تا رفتار یکسان بمونه.
+ *
+ * Idempotency: بر پایهٔ ترکیب (provider, label) — اگه `skipExisting=true`
+ * ردیف‌های با همون label رد می‌شن.
+ *
+ * توکن‌های نامعتبر (non-hex یا طول اشتباه) به `result.invalid` اضافه
+ * می‌شن ولی import بقیه ادامه پیدا می‌کنه.
  */
-export function valueForEntry(entry: GetBlockEntry, region: GetBlockRegion = resolveRegion()): string {
-  return buildEndpointUrl(entry.token, region);
-}
+export async function importGetBlockConfig(
+  rawConfig: string | object,
+  opts: ImportOptions
+): Promise<ImportResult> {
+  const log = opts.logger ?? { info: (m) => console.log(m), warn: (m) => console.warn(m) };
+  const entries = parseConfig(rawConfig);
 
-/**
- * Label پیش‌فرض برای UI/DB (قابل override توسط کالر).
- */
-export function defaultLabel(entry: GetBlockEntry): string {
-  return `GetBlock ${entry.chain}-${entry.network}`;
+  const result: ImportResult = { added: 0, skipped: 0, invalid: [], skippedBtc: 0 };
+
+  // set از label های موجود برای idempotency (فقط provider های مرتبط)
+  const existingLabels = new Set<string>();
+  if (opts.skipExisting !== false) {
+    const existing = await listCredentials('eth_rpc');
+    for (const it of existing) {
+      if (it.label) existingLabels.add(`eth_rpc|${it.label}`);
+    }
+  }
+
+  // BTC‌ها رو جداگانه بشمار تا لاگ واضح باشه (نه صرفاً skip کلی)
+  const btcCount = entries.filter((e) => e.chain === 'btc').length;
+  if (btcCount > 0) {
+    log.info(
+      `[getblock-import] Skipping ${btcCount} BTC token(s): GetBlock BTC is not wired ` +
+      `to any flow yet. Re-enable when broadcast is added.`
+    );
+    result.skippedBtc = btcCount;
+    result.skipped += btcCount;
+  }
+
+  for (const entry of entries) {
+    if (entry.chain === 'btc') continue; // لاگ بالا انجام شد
+
+    // validation اول از همه
+    if (!isValidGetBlockToken(entry.token)) {
+      result.invalid.push(
+        `${entry.chain}/${entry.network}: ${entry.token.slice(0, 6)}… (expected 32 hex chars)`
+      );
+      continue;
+    }
+
+    const provider = providerForEntry(entry);
+    if (!provider) {
+      // chain/network/rpcType unsupported
+      result.skipped++;
+      log.info(
+        `[getblock-import] unsupported entry ${entry.chain}/${entry.network}/${entry.rpcType} — skip`
+      );
+      continue;
+    }
+
+    const label = defaultLabel(entry);
+    const dedupKey = `${provider}|${label}`;
+    if (existingLabels.has(dedupKey)) {
+      result.skipped++;
+      continue;
+    }
+
+    const value = buildEndpointUrl(entry.token);
+    await addCredential({
+      provider,
+      value,
+      label,
+      adminId: opts.adminId,
+      // GetBlock free tier = 50k CU/day. یه benchmark run می‌تونه کل این
+      // سهمیه رو بخوره و traffic واقعی تا فردا بیکار بشه. پس پیش‌فرض false.
+      benchmarkAllowed: false,
+    });
+    existingLabels.add(dedupKey);
+    result.added++;
+  }
+
+  invalidateCache('eth_rpc');
+  return result;
 }
