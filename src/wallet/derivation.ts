@@ -12,7 +12,7 @@ import * as bip39 from 'bip39';
 import { BIP32Factory, type BIP32Interface } from 'bip32';
 import * as ecc from 'tiny-secp256k1';
 import * as bitcoin from 'bitcoinjs-lib';
-import { HDNodeWallet, keccak256 } from 'ethers';
+import { getAddress, keccak256 } from 'ethers';
 import bs58check from 'bs58check';
 import { randomBytes, randomFillSync } from 'node:crypto';
 
@@ -41,8 +41,32 @@ export function generateMnemonic(wordCount: 12 | 24 = 12): string {
   return bip39.generateMnemonic(strength);
 }
 
+/**
+ * نرمال‌سازی استاندارد برای mnemonic کاربر (BIP39 §3.1):
+ *   - NFKD: compatibility decomposition (NBSP U+00A0 → SPACE و …)
+ *   - strip zero-width chars: U+200B/C/D، U+FEFF (BOM)، U+2060 — اینا تو \s نیستن
+ *     و از copy/paste اپ‌های دیگه راحت وارد می‌شن.
+ *   - trim + collapse whitespace: tab/newline/multi-space → single space
+ *   - lowercase: wordlist انگلیسی bip39 همه‌ش lowercase ست.
+ *
+ * بدون این pipeline، یه رشته‌ی ظاهراً یکسان ممکنه ظاهری OK باشه ولی seed
+ * متفاوت بده (PBKDF2 روی بایت‌های خام اجرا می‌شه).
+ */
+// U+200B..U+200D (zero-width space / non-joiner / joiner), U+2060 (word joiner),
+// U+FEFF (BOM / zero-width no-break space). هیچ‌کدوم تو \s نیستن.
+const ZERO_WIDTH_CHARS = /\u200B|\u200C|\u200D|\u2060|\uFEFF/g;
+
+export function normalizeMnemonic(raw: string): string {
+  return raw
+    .normalize('NFKD')
+    .replace(ZERO_WIDTH_CHARS, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
 export function isValidMnemonic(mnemonic: string): boolean {
-  return bip39.validateMnemonic(mnemonic.trim().toLowerCase());
+  return bip39.validateMnemonic(normalizeMnemonic(mnemonic));
 }
 
 /**
@@ -88,7 +112,7 @@ export async function deriveAddress(
 ): Promise<DerivedAddress> {
   const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
   const root = bip32.fromSeed(seed);
-  return deriveFromRoot(root, chain, index, mnemonic, passphrase);
+  return deriveFromRoot(root, chain, index);
 }
 
 // ─────────────────────────── Batch derivation (مهم برای scale) ───────────────────────────
@@ -117,7 +141,7 @@ export async function deriveMany(
   for (const req of requests) {
     for (let i = 0; i < req.count; i++) {
       const idx = req.fromIndex + i;
-      results.push(deriveFromRoot(root, req.chain, idx, mnemonic, passphrase));
+      results.push(deriveFromRoot(root, req.chain, idx));
     }
   }
   return results;
@@ -129,14 +153,12 @@ function deriveFromRoot(
   root: BIP32Interface,
   chain: Chain,
   index: number,
-  mnemonic: string,
-  passphrase: string
 ): DerivedAddress {
   const path = PATHS[chain](index);
+  const node = root.derivePath(path);
 
   switch (chain) {
     case 'BTC': {
-      const node = root.derivePath(path);
       const { address } = bitcoin.payments.p2wpkh({
         pubkey: Buffer.from(node.publicKey),
         network: bitcoin.networks.bitcoin,
@@ -145,32 +167,28 @@ function deriveFromRoot(
     }
 
     case 'ETH': {
-      // ethers خودش HD derivation داره؛ از همون استفاده می‌کنیم
-      // برای consistency با MetaMask
-      const wallet = HDNodeWallet.fromPhrase(mnemonic, passphrase, path);
-      return { chain, index, path, address: wallet.address };
+      // BIP32 قطعی‌ست، پس نتیجه دقیقاً برابر MetaMask/Trust Wallet می‌شه.
+      // getAddress از ethers همون EIP-55 checksum رو اعمال می‌کنه.
+      const last20 = keccakLast20Hex(node.publicKey);
+      return { chain, index, path, address: getAddress('0x' + last20) };
     }
 
     case 'TRON': {
-      const node = root.derivePath(path);
-      const address = tronAddressFromPubKey(node.publicKey);
-      return { chain, index, path, address };
+      const last20 = keccakLast20Hex(node.publicKey);
+      const payload = Buffer.concat([
+        Buffer.from([0x41]),             // TRON mainnet prefix
+        Buffer.from(last20, 'hex'),
+      ]);
+      return { chain, index, path, address: bs58check.encode(payload) };
     }
   }
 }
 
-function tronAddressFromPubKey(compressedPubKey: Uint8Array): string {
+function keccakLast20Hex(compressedPubKey: Uint8Array): string {
   const uncompressed = ecc.pointCompress(compressedPubKey, false);
   if (!uncompressed) throw new Error('pubkey decompression failed');
 
   const xy = uncompressed.slice(1); // drop 0x04 prefix
   const hashHex = keccak256(xy);     // "0x" + 64 hex chars
-  const last20 = hashHex.slice(26);  // last 20 bytes = 40 hex chars
-
-  const payload = Buffer.concat([
-    Buffer.from([0x41]),             // TRON mainnet prefix
-    Buffer.from(last20, 'hex'),
-  ]);
-
-  return bs58check.encode(payload);
+  return hashHex.slice(26);          // last 20 bytes = 40 hex chars
 }
