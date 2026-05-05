@@ -21,6 +21,7 @@ import { createWalletsBatch, createWallet } from '../../services/wallet-service.
 import {
   runTemplate,
   getTemplate,
+  setTemplateStatus,
   RunBlockedError,
   type AuditCtx,
 } from '../../services/batch-templates-service.js';
@@ -69,6 +70,24 @@ async function maybeSpawnNext(row: FinalizeRow): Promise<void> {
   if (!t) {
     // template mid-flight حذف شده. chain به صورت طبیعی متوقف می‌شه.
     console.log(`[gen] chain stopped: template ${templateId} not found (parent=${parentJobId})`);
+    return;
+  }
+
+  // parent finalize='failed' → chain رو خودکار pause می‌کنیم. فقط failed یعنی
+  // هیچ ولتی ساخته نشد (zero progress) — ادامه دادن chain تو این حالت معمولاً
+  // همون root cause رو دوباره trigger می‌کنه و user_id range رو می‌سوزونه.
+  // partial و completed عادی spawn می‌کنن. اپراتور audit log می‌بینه و دستی
+  // resume می‌کنه. failedJobId تو audit details رو می‌فرستیم تا کلیک‌پذیر بشه.
+  if (row.status === 'failed') {
+    if (t.status === 'active') {
+      await setTemplateStatus(templateId, 'paused', CHAIN_CTX, {
+        reason: 'auto_paused_on_failure',
+        failedJobId: parentJobId,
+      });
+    }
+    console.warn(
+      `[gen] chain auto-paused: template=${templateId} parent=${parentJobId} status=failed`
+    );
     return;
   }
 

@@ -141,6 +141,15 @@ export function validateSpec(raw: unknown): TemplateSpec {
   return out;
 }
 
+function isPgUniqueViolation(e: unknown): boolean {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    (e as { code?: string }).code === '23505'
+  );
+}
+
 function validateCooldownSeconds(raw: unknown): number {
   if (raw === undefined || raw === null) return 0;
   const n = Number(raw);
@@ -360,7 +369,7 @@ export async function setTemplateStatus(
   id: number,
   status: Status,
   ctx: AuditCtx,
-  reason?: string,
+  details: Record<string, unknown> = {},
 ): Promise<BatchTemplate | null> {
   const existing = await getTemplate(id);
   if (!existing) return null;
@@ -375,7 +384,7 @@ export async function setTemplateStatus(
   await audit(ctx, 'batch_template_status', id, true, {
     from: existing.status,
     to: status,
-    ...(reason ? { reason } : {}),
+    ...details,
   });
 
   return { ...existing, status };
@@ -522,27 +531,46 @@ export async function runTemplate(
 
   // 7) generation_jobs row — template_id و parent_job_id رو ست می‌کنیم.
   // اگه parent_job_id duplicate باشه (race بین دو chain-spawn handler)،
-  // unique-index روی parent_job_id برای 23505 raise می‌ده. کالر catch می‌کنه.
-  const jobRow = await pool.query<{ id: string }>(
-    `INSERT INTO generation_jobs
-       (requested_by, word_count, total_count, status,
-        chunks_total, chunks_done, failed_count,
-        addresses_per_wallet, start_user_id,
-        template_id, parent_job_id)
-     VALUES ($1, $2, $3, 'pending', $4, 0, 0, $5, $6, $7, $8)
-     RETURNING id`,
-    [
-      ctx.adminId,
-      spec.wordCount,
-      spec.count,
-      chunksTotal,
-      spec.addressesPerWallet,
-      start,
-      templateId,
-      parentJobId,
-    ]
-  );
-  const jobDbId = Number(jobRow.rows[0].id);
+  // unique-index روی generation_jobs(parent_job_id) WHERE NOT NULL برای 23505
+  // raise می‌ده. اون‌جا تبدیل به RunBlockedError('duplicate_chain_spawn') می‌شه
+  // که کالر هندل می‌کنه (ad-hoc inline تو generation worker یا template-chain
+  // worker — هردو RunBlockedError رو فقط log می‌کنن و موفق برمی‌گردن).
+  let jobDbId: number;
+  try {
+    const jobRow = await pool.query<{ id: string }>(
+      `INSERT INTO generation_jobs
+         (requested_by, word_count, total_count, status,
+          chunks_total, chunks_done, failed_count,
+          addresses_per_wallet, start_user_id,
+          template_id, parent_job_id)
+       VALUES ($1, $2, $3, 'pending', $4, 0, 0, $5, $6, $7, $8)
+       RETURNING id`,
+      [
+        ctx.adminId,
+        spec.wordCount,
+        spec.count,
+        chunksTotal,
+        spec.addressesPerWallet,
+        start,
+        templateId,
+        parentJobId,
+      ]
+    );
+    jobDbId = Number(jobRow.rows[0].id);
+  } catch (e) {
+    if (parentJobId != null && isPgUniqueViolation(e)) {
+      await audit(ctx, 'batch_template_run', templateId, false, {
+        reason: 'duplicate_chain_spawn',
+        trigger: triggerCtx,
+        parentJobId,
+      });
+      throw new RunBlockedError(
+        'duplicate_chain_spawn',
+        `parent ${parentJobId} already has a chain child — race lost`
+      );
+    }
+    throw e;
+  }
 
   // 8) enqueue chunks
   for (let i = 0; i < chunksTotal; i++) {
