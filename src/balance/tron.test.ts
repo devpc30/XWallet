@@ -56,6 +56,67 @@ describe('getTronBalance — fresh account (mocked)', () => {
   });
 });
 
+describe('getTronBalance — fallback (mocked)', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('falls back from tronstack 5xx to trongrid and returns the trongrid result', async () => {
+    const callsByHost: Record<string, number> = {};
+
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const u = String(url);
+      const host = new URL(u).host;
+      callsByHost[host] = (callsByHost[host] ?? 0) + 1;
+
+      if (host === 'api.tronstack.io') {
+        return new Response('upstream error', { status: 503 });
+      }
+      if (host === 'api.trongrid.io') {
+        if (u.endsWith('/wallet/getaccount')) {
+          return new Response(JSON.stringify({ balance: 35216519 }), { status: 200 });
+        }
+        if (u.endsWith('/wallet/triggerconstantcontract')) {
+          return new Response(
+            JSON.stringify({
+              result: { result: true },
+              constant_result: ['0'.repeat(58) + '2f4d60'],
+            }),
+            { status: 200 },
+          );
+        }
+      }
+      throw new Error(`unexpected url: ${u}`);
+    }) as typeof globalThis.fetch;
+
+    const result = await getTronBalance(KNOWN_HOLDER);
+    assert.equal(result.trx, 35216519n);
+    assert.equal(result.usdt, 0x2f4d60n);
+    assert.ok(callsByHost['api.tronstack.io'] >= 1, 'primary should be attempted');
+    assert.ok(callsByHost['api.trongrid.io'] >= 1, 'fallback should be attempted');
+  });
+
+  it('does NOT fall back on 4xx — propagates the error', async () => {
+    let trongridCalls = 0;
+
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      const u = String(url);
+      const host = new URL(u).host;
+      if (host === 'api.trongrid.io') trongridCalls += 1;
+      return new Response('bad request', { status: 400 });
+    }) as typeof globalThis.fetch;
+
+    await assert.rejects(() => getTronBalance(KNOWN_HOLDER), /400/);
+    assert.equal(trongridCalls, 0, 'fallback must not be attempted on 4xx');
+  });
+});
+
 // Live mainnet integration test. Gated by env var because public RPCs are
 // flaky and CI may run offline. Run manually with:
 //   TRON_INTEGRATION=1 npm test

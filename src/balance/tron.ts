@@ -10,8 +10,25 @@
 import bs58check from 'bs58check';
 
 const TRON_API = process.env.TRON_API ?? 'https://api.tronstack.io';
+const TRON_API_FALLBACK = 'https://api.trongrid.io';
 const USDT_TRC20 = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const REQUEST_TIMEOUT_MS = 5000;
+
+/**
+ * Errors that should trigger a fallback to the secondary host:
+ * 5xx responses, network/timeout errors, and contract-level failures
+ * (`result.result === false`). 4xx errors propagate — they signal a
+ * malformed request, not a host issue, and falling back would just
+ * hide the bug. Successful calls that return a zero balance are NOT
+ * failures.
+ */
+function isFallbackEligible(err: unknown): boolean {
+  if (!(err instanceof Error)) return true;
+  // postJson throws "tron /path NNN" for HTTP errors.
+  const m = err.message.match(/\s(\d{3})$/);
+  if (m) return Number(m[1]) >= 500;
+  return true;
+}
 
 export interface TronBalanceResult {
   address: string;
@@ -69,13 +86,30 @@ async function fetchUsdt(host: string, address: string): Promise<bigint> {
   return BigInt('0x' + hex);
 }
 
-export async function getTronBalance(address: string): Promise<TronBalanceResult> {
+async function fetchPair(host: string, address: string): Promise<{ trx: bigint; usdt: bigint }> {
   const [trx, usdt] = await Promise.all([
-    fetchTrx(TRON_API, address),
-    fetchUsdt(TRON_API, address),
+    fetchTrx(host, address),
+    fetchUsdt(host, address),
   ]);
-  console.debug(`[tron] ${address} via ${TRON_API}`);
-  return { address, trx, usdt };
+  return { trx, usdt };
+}
+
+export async function getTronBalance(address: string): Promise<TronBalanceResult> {
+  const hosts = TRON_API === TRON_API_FALLBACK ? [TRON_API] : [TRON_API, TRON_API_FALLBACK];
+
+  let lastErr: unknown;
+  for (const host of hosts) {
+    try {
+      const pair = await fetchPair(host, address);
+      console.debug(`[tron] ${address} via ${host}`);
+      return { address, ...pair };
+    } catch (err) {
+      lastErr = err;
+      if (!isFallbackEligible(err)) throw err;
+      console.debug(`[tron] ${address} fallback from ${host}: ${(err as Error).message}`);
+    }
+  }
+  throw lastErr;
 }
 
 export async function batchTronBalances(
