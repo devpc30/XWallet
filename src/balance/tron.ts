@@ -13,6 +13,18 @@ const TRON_API = process.env.TRON_API ?? 'https://api.tronstack.io';
 const TRON_API_FALLBACK = 'https://api.trongrid.io';
 const USDT_TRC20 = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
 const REQUEST_TIMEOUT_MS = 5000;
+const CACHE_TTL_MS = 30_000;
+
+interface CacheEntry {
+  trx: bigint;
+  usdt: bigint;
+  expiresAt: number;
+}
+const balanceCache = new Map<string, CacheEntry>();
+
+export function _resetTronCache(): void {
+  balanceCache.clear();
+}
 
 /**
  * Errors that should trigger a fallback to the secondary host:
@@ -95,6 +107,12 @@ async function fetchPair(host: string, address: string): Promise<{ trx: bigint; 
 }
 
 export async function getTronBalance(address: string): Promise<TronBalanceResult> {
+  const now = Date.now();
+  const cached = balanceCache.get(address);
+  if (cached && cached.expiresAt > now) {
+    return { address, trx: cached.trx, usdt: cached.usdt };
+  }
+
   const hosts = TRON_API === TRON_API_FALLBACK ? [TRON_API] : [TRON_API, TRON_API_FALLBACK];
 
   let lastErr: unknown;
@@ -102,6 +120,7 @@ export async function getTronBalance(address: string): Promise<TronBalanceResult
     try {
       const pair = await fetchPair(host, address);
       console.debug(`[tron] ${address} via ${host}`);
+      balanceCache.set(address, { ...pair, expiresAt: now + CACHE_TTL_MS });
       return { address, ...pair };
     } catch (err) {
       lastErr = err;

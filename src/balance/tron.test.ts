@@ -2,7 +2,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { getTronBalance, addressToParam } from './tron.js';
+import { getTronBalance, addressToParam, _resetTronCache } from './tron.js';
 
 const KNOWN_HOLDER = 'TMuA6YqfCeX8EhbfYEg5y7S4DqzSJireY9';
 const KNOWN_HOLDER_PARAM =
@@ -25,10 +25,12 @@ describe('getTronBalance — fresh account (mocked)', () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    _resetTronCache();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    _resetTronCache();
   });
 
   it('returns 0n for both TRX and USDT when getaccount omits the balance field', async () => {
@@ -61,10 +63,12 @@ describe('getTronBalance — fallback (mocked)', () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    _resetTronCache();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    _resetTronCache();
   });
 
   it('falls back from tronstack 5xx to trongrid and returns the trongrid result', async () => {
@@ -114,6 +118,52 @@ describe('getTronBalance — fallback (mocked)', () => {
 
     await assert.rejects(() => getTronBalance(KNOWN_HOLDER), /400/);
     assert.equal(trongridCalls, 0, 'fallback must not be attempted on 4xx');
+  });
+});
+
+describe('getTronBalance — cache (mocked)', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    _resetTronCache();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    _resetTronCache();
+  });
+
+  it('serves the second call within TTL from cache without hitting the network', async () => {
+    let networkCalls = 0;
+
+    globalThis.fetch = (async (url: RequestInfo | URL) => {
+      networkCalls += 1;
+      const u = String(url);
+      if (u.endsWith('/wallet/getaccount')) {
+        return new Response(JSON.stringify({ balance: 42 }), { status: 200 });
+      }
+      if (u.endsWith('/wallet/triggerconstantcontract')) {
+        return new Response(
+          JSON.stringify({
+            result: { result: true },
+            constant_result: ['0'.repeat(62) + '7b'],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected url: ${u}`);
+    }) as typeof globalThis.fetch;
+
+    const first = await getTronBalance(KNOWN_HOLDER);
+    const callsAfterFirst = networkCalls;
+    const second = await getTronBalance(KNOWN_HOLDER);
+
+    assert.equal(first.trx, 42n);
+    assert.equal(first.usdt, 0x7bn);
+    assert.deepEqual(second, first);
+    assert.equal(callsAfterFirst, 2, 'first call issues both /wallet/* requests');
+    assert.equal(networkCalls, 2, 'second call must not touch the network');
   });
 });
 
