@@ -42,7 +42,7 @@ function defaultConcurrency(): number {
   return Math.max(1, os.cpus().length - 1);
 }
 
-interface FinalizeRow {
+export interface FinalizeRow {
   id: string;
   status: string;
   chunks_done: number;
@@ -56,8 +56,10 @@ interface FinalizeRow {
  *
  * اگه template_id null باشه، این یه ad-hoc job ست (POST /api/jobs مستقیم،
  * بدون template) و عضو هیچ chain ای نیست — early return.
+ *
+ * Exported برای تست؛ خود finalize handler تو همین فایل صداش می‌زنه.
  */
-async function maybeSpawnNext(row: FinalizeRow): Promise<void> {
+export async function maybeSpawnNext(row: FinalizeRow): Promise<void> {
   // ad-hoc job: template_id null → عضو هیچ chain ای نیست؛ early return.
   if (row.template_id == null) {
     return;
@@ -119,14 +121,15 @@ async function maybeSpawnNext(row: FinalizeRow): Promise<void> {
   }
 
   // cooldown > 0 → BullMQ delayed job می‌فرستیم تا روی restart worker از دست
-  // نره. jobId همون parentJobId ست تا اگه به هر دلیل دو بار enqueue بشه،
-  // BullMQ خودش drop کنه.
+  // نره. jobId از parentJobId مشتق می‌شه تا اگه به هر دلیل دو بار enqueue بشه،
+  // BullMQ خودش drop کنه. شکل سه‌بخشی اجباریه چون BullMQ ≥5.7 jobIdهای
+  // تک-کولون رو reject می‌کنه (.split(':').length باید 1 یا 3 باشه).
   await templateChainQueue.add(
     'chain-spawn',
     { templateId, parentJobId },
     {
       delay: t.cooldownSeconds * 1000,
-      jobId: `chain:${parentJobId}`,
+      jobId: `chain:spawn:${parentJobId}`,
     }
   );
   console.log(
