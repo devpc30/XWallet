@@ -19,7 +19,6 @@ import 'dotenv/config';
 import { startGenerationWorker } from './queue/workers/generation.js';
 import { startBalanceWorker } from './queue/workers/balance.js';
 import { startCleanupWorker } from './queue/workers/cleanup.js';
-import { startTemplateRunsWorker } from './queue/workers/template-runs.js';
 import { startTemplateChainWorker } from './queue/workers/template-chain.js';
 import {
   scheduleRecurringBalanceChecks,
@@ -34,7 +33,6 @@ async function main() {
   const genWorker = startGenerationWorker();
   const balWorker = startBalanceWorker();
   const cleanupWorker = startCleanupWorker();
-  const tplWorker = startTemplateRunsWorker();
   const chainWorker = startTemplateChainWorker();
 
   // Repeatable jobs (idempotent — اگه قبلاً ست شدن، override می‌شن)
@@ -50,7 +48,6 @@ async function main() {
         genWorker.close(),
         balWorker.close(),
         cleanupWorker.close(),
-        tplWorker.close(),
         chainWorker.close(),
       ]);
       await closePool();

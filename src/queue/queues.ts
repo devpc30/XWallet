@@ -36,12 +36,6 @@ export interface CleanupJobData {
   trigger: 'scheduled' | 'manual';
 }
 
-export interface TemplateRunJobData {
-  templateId: number;
-  /** برای logging — 'cron' وقتی repeatable fire می‌کنه. */
-  trigger: 'cron';
-}
-
 /**
  * chain-spawn job. Producer: generation worker وقتی parent job finalize می‌شه
  * و template.cooldown_seconds > 0. Consumer: template-chain worker که runTemplate
@@ -84,17 +78,6 @@ export const cleanupQueue = new Queue<CleanupJobData>(QUEUE_NAMES.CLEANUP, {
     attempts: 1,
     removeOnComplete: { count: 30 },
     removeOnFail: { count: 30 },
-  },
-});
-
-export const templateRunsQueue = new Queue<TemplateRunJobData>(QUEUE_NAMES.TEMPLATE_RUNS, {
-  connection: producerConnection,
-  defaultJobOptions: {
-    // اگه fire شد و runTemplate fail کرد، retry آنی. بیشتر از یک بار retry نمی‌کنیم —
-    // اگه واقعاً fail شد، اپراتور باید audit log رو ببینه و دستی Run Now بزنه.
-    attempts: 1,
-    removeOnComplete: { count: 50 },
-    removeOnFail: { count: 100 },
   },
 });
 

@@ -23,8 +23,6 @@ export const QUEUE_NAMES = {
   GENERATION: 'wallet-generation',
   BALANCE_CHECK: 'balance-check',
   CLEANUP: 'cleanup',
-  /** legacy — تو نسخهٔ chain-on-completion هیچ producer ای نداره. تو commit بعدی delete می‌شه. */
-  TEMPLATE_RUNS: 'template-runs',
   /** chain-spawn delayed jobs برای template هایی که cooldown_seconds > 0 دارن. */
   TEMPLATE_CHAIN: 'template-chain',
 } as const;
