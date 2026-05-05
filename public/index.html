@@ -717,17 +717,19 @@ createApp({
           </tbody>
         </table>
       </div>
-      <div v-if="showReveal" class="fixed inset-0 bg-black/50 flex items-center justify-center px-4 py-8 z-50 overflow-y-auto">
-        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-bold mb-4">🔓 نمایش Mnemonic</h3>
-          <div v-if="revealBusy" class="text-slate-600 text-sm">در حال بارگذاری...</div>
-          <div v-else-if="revealError">
-            <div class="text-red-600 text-sm mb-3">{{ revealError }}</div>
-            <button @click="closeReveal" class="w-full py-2 bg-slate-800 text-white rounded">بستن</button>
-          </div>
-          <div v-else-if="revealedMnemonic">
-            <div class="bg-slate-100 p-4 rounded mono text-sm break-all">{{ revealedMnemonic }}</div>
-            <button @click="closeReveal" class="mt-4 w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+      <div v-if="showReveal" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <h3 class="text-lg font-bold mb-4">🔓 نمایش Mnemonic</h3>
+            <div v-if="revealBusy" class="text-slate-600 text-sm">در حال بارگذاری...</div>
+            <div v-else-if="revealError">
+              <div class="text-red-600 text-sm mb-3">{{ revealError }}</div>
+              <button @click="closeReveal" class="w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+            </div>
+            <div v-else-if="revealedMnemonic">
+              <div class="bg-slate-100 p-4 rounded mono text-sm break-all">{{ revealedMnemonic }}</div>
+              <button @click="closeReveal" class="mt-4 w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+            </div>
           </div>
         </div>
       </div>
@@ -779,19 +781,21 @@ createApp({
           </tbody>
         </table>
       </div>
-      <div v-if="showNew" class="fixed inset-0 bg-black/50 flex items-center justify-center px-4 py-8 z-50 overflow-y-auto">
-        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-bold mb-4">Job جدید</h3>
-          <form @submit.prevent="submit" class="space-y-3">
-            <div><label class="block text-sm mb-1">تعداد</label><input v-model="form.count" type="number" min="1" max="100000" required class="w-full px-3 py-2 border rounded" /></div>
-            <div class="grid grid-cols-2 gap-3">
-              <div><label class="block text-sm mb-1">کلمات</label><select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white"><option :value="12">۱۲</option><option :value="24">۲۴</option></select></div>
-              <div><label class="block text-sm mb-1">آدرس</label><input v-model="form.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" /></div>
-            </div>
-            <div><label class="block text-sm mb-1">User ID شروع</label><input v-model="form.startUserId" type="number" placeholder="اختیاری" class="w-full px-3 py-2 border rounded" /></div>
-            <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
-            <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'شروع' }}</button></div>
-          </form>
+      <div v-if="showNew" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 class="text-lg font-bold mb-4">Job جدید</h3>
+            <form @submit.prevent="submit" class="space-y-3">
+              <div><label class="block text-sm mb-1">تعداد</label><input v-model="form.count" type="number" min="1" max="100000" required class="w-full px-3 py-2 border rounded" /></div>
+              <div class="grid grid-cols-2 gap-3">
+                <div><label class="block text-sm mb-1">کلمات</label><select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white"><option :value="12">۱۲</option><option :value="24">۲۴</option></select></div>
+                <div><label class="block text-sm mb-1">آدرس</label><input v-model="form.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" /></div>
+              </div>
+              <div><label class="block text-sm mb-1">User ID شروع</label><input v-model="form.startUserId" type="number" placeholder="اختیاری" class="w-full px-3 py-2 border rounded" /></div>
+              <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
+              <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'شروع' }}</button></div>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -988,60 +992,62 @@ createApp({
         </table>
       </div>
 
-      <div v-if="showForm" class="fixed inset-0 bg-black/50 flex items-center justify-center px-4 py-8 z-50 overflow-y-auto">
-        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-bold mb-4">{{ editing ? 'ویرایش template' : 'Template جدید' }}</h3>
-          <form @submit.prevent="submit" class="space-y-3">
-            <div>
-              <label class="block text-sm mb-1">نام</label>
-              <input v-model="form.name" required maxlength="100" class="w-full px-3 py-2 border rounded" placeholder="مثلاً: روزانه ۱۰۰۰ ولت" />
-            </div>
-            <div>
-              <label class="block text-sm mb-1">cooldown بین batchها (ثانیه)</label>
-              <input v-model="form.cooldownSeconds" type="number" min="0" placeholder="0" class="w-full px-3 py-2 border rounded" />
-              <div class="text-xs text-slate-500 mt-1">۰ = batch بعدی بلافاصله بعد از تموم شدن قبلی fire می‌شه. مقدار بزرگ‌تر برای rate-limiting روی resource downstream.</div>
-            </div>
-
-            <div class="border-t pt-3 mt-2">
-              <div class="text-sm font-bold mb-2">spec</div>
-              <div class="grid grid-cols-3 gap-3">
-                <div>
-                  <label class="block text-sm mb-1">تعداد</label>
-                  <input v-model="form.spec.count" type="number" min="1" max="10000" required class="w-full px-3 py-2 border rounded" />
-                </div>
-                <div>
-                  <label class="block text-sm mb-1">کلمات</label>
-                  <select v-model="form.spec.wordCount" class="w-full px-3 py-2 border rounded bg-white">
-                    <option :value="12">۱۲</option>
-                    <option :value="24">۲۴</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="block text-sm mb-1">آدرس/ولت</label>
-                  <input v-model="form.spec.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" />
-                </div>
+      <div v-if="showForm" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <h3 class="text-lg font-bold mb-4">{{ editing ? 'ویرایش template' : 'Template جدید' }}</h3>
+            <form @submit.prevent="submit" class="space-y-3">
+              <div>
+                <label class="block text-sm mb-1">نام</label>
+                <input v-model="form.name" required maxlength="100" class="w-full px-3 py-2 border rounded" placeholder="مثلاً: روزانه ۱۰۰۰ ولت" />
               </div>
-              <div class="grid grid-cols-2 gap-3 mt-3">
-                <div>
-                  <label class="block text-sm mb-1">User ID شروع</label>
-                  <input v-model="form.spec.startUserId" type="number" placeholder="اختیاری (auto)" class="w-full px-3 py-2 border rounded" />
-                </div>
-                <div>
-                  <label class="block text-sm mb-1">chunk size</label>
-                  <input v-model="form.spec.chunkSize" type="number" min="1" max="5000" class="w-full px-3 py-2 border rounded" />
-                </div>
+              <div>
+                <label class="block text-sm mb-1">cooldown بین batchها (ثانیه)</label>
+                <input v-model="form.cooldownSeconds" type="number" min="0" placeholder="0" class="w-full px-3 py-2 border rounded" />
+                <div class="text-xs text-slate-500 mt-1">۰ = batch بعدی بلافاصله بعد از تموم شدن قبلی fire می‌شه. مقدار بزرگ‌تر برای rate-limiting روی resource downstream.</div>
               </div>
-              <div class="text-xs text-slate-500 mt-2">سقف سمت سرور: ۱۰٬۰۰۰ ولت. در صورت bypass UI همچنان enforced.</div>
-            </div>
 
-            <div v-if="formError" class="text-red-600 text-sm">{{ formError }}</div>
-            <div class="flex gap-2 justify-end pt-2">
-              <button type="button" @click="showForm = false" class="px-4 py-2 border rounded">انصراف</button>
-              <button type="submit" :disabled="formBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">
-                {{ formBusy ? '...' : (editing ? 'ذخیره' : 'ساخت') }}
-              </button>
-            </div>
-          </form>
+              <div class="border-t pt-3 mt-2">
+                <div class="text-sm font-bold mb-2">spec</div>
+                <div class="grid grid-cols-3 gap-3">
+                  <div>
+                    <label class="block text-sm mb-1">تعداد</label>
+                    <input v-model="form.spec.count" type="number" min="1" max="10000" required class="w-full px-3 py-2 border rounded" />
+                  </div>
+                  <div>
+                    <label class="block text-sm mb-1">کلمات</label>
+                    <select v-model="form.spec.wordCount" class="w-full px-3 py-2 border rounded bg-white">
+                      <option :value="12">۱۲</option>
+                      <option :value="24">۲۴</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm mb-1">آدرس/ولت</label>
+                    <input v-model="form.spec.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" />
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label class="block text-sm mb-1">User ID شروع</label>
+                    <input v-model="form.spec.startUserId" type="number" placeholder="اختیاری (auto)" class="w-full px-3 py-2 border rounded" />
+                  </div>
+                  <div>
+                    <label class="block text-sm mb-1">chunk size</label>
+                    <input v-model="form.spec.chunkSize" type="number" min="1" max="5000" class="w-full px-3 py-2 border rounded" />
+                  </div>
+                </div>
+                <div class="text-xs text-slate-500 mt-2">سقف سمت سرور: ۱۰٬۰۰۰ ولت. در صورت bypass UI همچنان enforced.</div>
+              </div>
+
+              <div v-if="formError" class="text-red-600 text-sm">{{ formError }}</div>
+              <div class="flex gap-2 justify-end pt-2">
+                <button type="button" @click="showForm = false" class="px-4 py-2 border rounded">انصراف</button>
+                <button type="submit" :disabled="formBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">
+                  {{ formBusy ? '...' : (editing ? 'ذخیره' : 'ساخت') }}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -1319,40 +1325,44 @@ createApp({
           </table>
         </div>
       </div>
-      <div v-if="showNew" class="fixed inset-0 bg-black/50 flex items-center justify-center px-4 py-8 z-50 overflow-y-auto">
-        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-bold mb-4">افزودن</h3>
-          <form @submit.prevent="submit" class="space-y-3">
-            <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option></select></div>
-            <div><label class="block text-sm mb-1">مقدار</label><input v-model="form.value" type="text" required class="w-full px-3 py-2 border rounded mono text-xs" /></div>
-            <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
-            <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
-            <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy || !form.value.trim()" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'افزودن' }}</button></div>
-          </form>
+      <div v-if="showNew" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 class="text-lg font-bold mb-4">افزودن</h3>
+            <form @submit.prevent="submit" class="space-y-3">
+              <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option></select></div>
+              <div><label class="block text-sm mb-1">مقدار</label><input v-model="form.value" type="text" required class="w-full px-3 py-2 border rounded mono text-xs" /></div>
+              <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
+              <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
+              <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy || !form.value.trim()" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'افزودن' }}</button></div>
+            </form>
+          </div>
         </div>
       </div>
-      <div v-if="showGbImport" class="fixed inset-0 bg-black/50 flex items-center justify-center px-4 py-8 z-50 overflow-y-auto">
-        <div class="bg-white rounded-xl shadow-xl max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto">
-          <h3 class="text-lg font-bold mb-2">📥 ایمپورت یکجا از GetBlock</h3>
-          <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن و روی <code>benchmark_allowed=false</code> تنظیم می‌شن تا سهمیهٔ free-tier حفظ بشه.</p>
-          <form @submit.prevent="gbImport" class="space-y-3">
-            <textarea v-model="gbForm.config" rows="8" required dir="ltr" class="w-full px-3 py-2 border rounded mono text-xs font-mono" placeholder='{"shared":{"eth":{"mainnet":{"jsonRpc":["<token>"]}}}}'></textarea>
-            <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="gbForm.skipExisting"> رد کردن توکن‌های تکراری (بر اساس label)</label>
-            <div v-if="gbError" class="text-red-600 text-sm">❌ {{ gbError }}</div>
-            <div v-if="gbResult" class="text-sm bg-slate-50 rounded p-3 border">
-              <div>✅ added: <b>{{ gbResult.added }}</b></div>
-              <div>↷ skipped: <b>{{ gbResult.skipped }}</b> <span v-if="gbResult.skippedBtc > 0">(شامل {{ gbResult.skippedBtc }} BTC skip — مصرف‌کننده نداریم)</span></div>
-              <div v-if="gbResult.invalid.length > 0">⚠ invalid: <b>{{ gbResult.invalid.length }}</b>
-                <ul class="mt-1 text-xs text-amber-700">
-                  <li v-for="m in gbResult.invalid" :key="m">• {{ m }}</li>
-                </ul>
+      <div v-if="showGbImport" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-center justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-xl w-full p-6">
+            <h3 class="text-lg font-bold mb-2">📥 ایمپورت یکجا از GetBlock</h3>
+            <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن و روی <code>benchmark_allowed=false</code> تنظیم می‌شن تا سهمیهٔ free-tier حفظ بشه.</p>
+            <form @submit.prevent="gbImport" class="space-y-3">
+              <textarea v-model="gbForm.config" rows="8" required dir="ltr" class="w-full px-3 py-2 border rounded mono text-xs font-mono" placeholder='{"shared":{"eth":{"mainnet":{"jsonRpc":["<token>"]}}}}'></textarea>
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="gbForm.skipExisting"> رد کردن توکن‌های تکراری (بر اساس label)</label>
+              <div v-if="gbError" class="text-red-600 text-sm">❌ {{ gbError }}</div>
+              <div v-if="gbResult" class="text-sm bg-slate-50 rounded p-3 border">
+                <div>✅ added: <b>{{ gbResult.added }}</b></div>
+                <div>↷ skipped: <b>{{ gbResult.skipped }}</b> <span v-if="gbResult.skippedBtc > 0">(شامل {{ gbResult.skippedBtc }} BTC skip — مصرف‌کننده نداریم)</span></div>
+                <div v-if="gbResult.invalid.length > 0">⚠ invalid: <b>{{ gbResult.invalid.length }}</b>
+                  <ul class="mt-1 text-xs text-amber-700">
+                    <li v-for="m in gbResult.invalid" :key="m">• {{ m }}</li>
+                  </ul>
+                </div>
               </div>
-            </div>
-            <div class="flex gap-2 justify-end">
-              <button type="button" @click="showGbImport = false" class="px-4 py-2 border rounded">بستن</button>
-              <button type="submit" :disabled="gbBusy || !gbForm.config.trim()" class="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-50">{{ gbBusy ? '...' : 'ایمپورت' }}</button>
-            </div>
-          </form>
+              <div class="flex gap-2 justify-end">
+                <button type="button" @click="showGbImport = false" class="px-4 py-2 border rounded">بستن</button>
+                <button type="submit" :disabled="gbBusy || !gbForm.config.trim()" class="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-50">{{ gbBusy ? '...' : 'ایمپورت' }}</button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </div>
